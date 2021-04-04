@@ -1210,6 +1210,8 @@ function M._make_floating_popup_size(contents, opts)
   return width, height
 end
 
+local floating_winbufnrs = {}
+
 --- Shows contents in a floating window.
 ---
 --@param contents table of lines to show in window
@@ -1246,15 +1248,35 @@ function M.open_floating_preview(contents, syntax, opts)
     api.nvim_buf_set_option(floating_bufnr, 'syntax', syntax)
   end
   local float_option = M.make_floating_popup_options(width, height, opts)
-  local floating_winnr = api.nvim_open_win(floating_bufnr, false, float_option)
+  local floating_winnr = api.nvim_open_win(floating_bufnr, true, float_option)
+  api.nvim_command('noautocmd wincmd p')
   if syntax == 'markdown' then
     api.nvim_win_set_option(floating_winnr, 'conceallevel', 2)
   end
   api.nvim_buf_set_lines(floating_bufnr, 0, -1, true, contents)
   api.nvim_buf_set_option(floating_bufnr, 'modifiable', false)
   api.nvim_buf_set_option(floating_bufnr, 'bufhidden', 'wipe')
-  M.close_preview_autocmd({"CursorMoved", "CursorMovedI", "BufHidden", "BufLeave"}, floating_winnr)
+  M.close_preview_autocmd({"CursorMoved", "CursorMovedI", "InsertEnter"}, floating_winnr)
+  floating_winbufnrs[vim.fn.bufnr('%')] = {floating_winnr, floating_bufnr}
   return floating_bufnr, floating_winnr
+end
+
+api.nvim_command("autocmd BufEnter,WinEnter * lua pcall(vim.lsp.util._on_buf_enter)")
+
+function M._on_buf_enter()
+  local bufnr = vim.fn.bufnr('%')
+
+  for opener_bufnr, win_bufnr in pairs(floating_winbufnrs) do
+    if not win_bufnr then goto continue end
+    local floating_winnr, floating_bufnr = unpack(win_bufnr)
+    if bufnr == opener_bufnr or bufnr == floating_bufnr then
+      -- When entering/exiting floating window, do nothing
+      goto continue
+    end
+    pcall(vim.api.nvim_win_close, floating_winnr, true)
+    floating_winbufnrs[opener_bufnr] = nil
+    ::continue::
+  end
 end
 
 do --[[ References ]]
