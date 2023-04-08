@@ -1,10 +1,13 @@
 #ifndef NVIM_CHARSET_H
 #define NVIM_CHARSET_H
 
+#include <stdbool.h>
+
 #include "nvim/buffer_defs.h"
 #include "nvim/eval/typval.h"
 #include "nvim/option_defs.h"
 #include "nvim/pos.h"
+#include "nvim/strings.h"
 #include "nvim/types.h"
 
 /// Return the folded-case equivalent of the given character
@@ -51,6 +54,6 @@ static inline bool vim_isbreak(int c)
 /// Used very often if 'linebreak' is set
 static inline bool vim_isbreak(int c)
 {
-  return breakat_flags[(char_u)c];
+  return breakat_flags[(uint8_t)c];
 }
 #endif  // NVIM_CHARSET_H

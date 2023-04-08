@@ -43,19 +43,25 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
-#include "nvim/ascii.h"
 #include "nvim/assert.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/fileio.h"
+#include "nvim/gettext.h"
+#include "nvim/globals.h"
+#include "nvim/macros.h"
 #include "nvim/memfile.h"
+#include "nvim/memfile_defs.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
 #include "nvim/message.h"
+#include "nvim/os/fs_defs.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
-#include "nvim/os_unix.h"
 #include "nvim/path.h"
+#include "nvim/pos.h"
 #include "nvim/vim.h"
 
 #define MEMFILE_PAGE_SIZE 4096       /// default page size
@@ -597,11 +603,9 @@ static int mf_read(memfile_T *mfp, bhdr_T *hp)
 static int mf_write(memfile_T *mfp, bhdr_T *hp)
 {
   off_T offset;             // offset in the file
-  blocknr_T nr;             // block nr which is being written
   bhdr_T *hp2;
   unsigned page_size;       // number of bytes in a page
   unsigned page_count;      // number of pages written
-  unsigned size;            // number of bytes written
 
   if (mfp->mf_fd < 0) {     // there is no file, can't write
     return FAIL;
@@ -620,7 +624,7 @@ static int mf_write(memfile_T *mfp, bhdr_T *hp)
   /// If block 'mf_infile_count' is not in the hash list, it has been
   /// freed. Fill the space in the file with data from the current block.
   for (;;) {
-    nr = hp->bh_bnum;
+    blocknr_T nr = hp->bh_bnum;  // block nr which is being written
     if (nr > mfp->mf_infile_count) {            // beyond end of file
       nr = mfp->mf_infile_count;
       hp2 = mf_find_hash(mfp, nr);              // NULL caught below
@@ -639,7 +643,7 @@ static int mf_write(memfile_T *mfp, bhdr_T *hp)
     } else {
       page_count = hp2->bh_page_count;
     }
-    size = page_size * page_count;
+    unsigned size = page_size * page_count;  // number of bytes written
     void *data = (hp2 == NULL) ? hp->bh_data : hp2->bh_data;
     if ((unsigned)write_eintr(mfp->mf_fd, data, size) != size) {
       /// Avoid repeating the error message, this mostly happens when the
@@ -752,7 +756,7 @@ void mf_free_fnames(memfile_T *mfp)
 void mf_set_fnames(memfile_T *mfp, char *fname)
 {
   mfp->mf_fname = fname;
-  mfp->mf_ffname = (char_u *)FullName_save(mfp->mf_fname, false);
+  mfp->mf_ffname = FullName_save(mfp->mf_fname, false);
 }
 
 /// Make name of memfile's swapfile a full path.
@@ -760,11 +764,13 @@ void mf_set_fnames(memfile_T *mfp, char *fname)
 /// Used before doing a :cd
 void mf_fullname(memfile_T *mfp)
 {
-  if (mfp != NULL && mfp->mf_fname != NULL && mfp->mf_ffname != NULL) {
-    xfree(mfp->mf_fname);
-    mfp->mf_fname = (char *)mfp->mf_ffname;
-    mfp->mf_ffname = NULL;
+  if (mfp == NULL || mfp->mf_fname == NULL || mfp->mf_ffname == NULL) {
+    return;
   }
+
+  xfree(mfp->mf_fname);
+  mfp->mf_fname = mfp->mf_ffname;
+  mfp->mf_ffname = NULL;
 }
 
 /// Return true if there are any translations pending for memfile.
@@ -794,7 +800,7 @@ static bool mf_do_open(memfile_T *mfp, char *fname, int flags)
     emsg(_("E300: Swap file already exists (symlink attack?)"));
   } else {
     // try to open the file
-    mfp->mf_fd = MCH_OPEN_RW((char *)mfp->mf_fname, flags | O_NOFOLLOW);
+    mfp->mf_fd = MCH_OPEN_RW(mfp->mf_fname, flags | O_NOFOLLOW);
   }
 
   // If the file cannot be opened, use memory only
@@ -815,8 +821,10 @@ static bool mf_do_open(memfile_T *mfp, char *fname, int flags)
 /// The number of buckets in the hashtable is increased by a factor of
 /// MHT_GROWTH_FACTOR when the average number of items per bucket
 /// exceeds 2 ^ MHT_LOG_LOAD_FACTOR.
-#define MHT_LOG_LOAD_FACTOR 6
-#define MHT_GROWTH_FACTOR   2   // must be a power of two
+enum {
+  MHT_LOG_LOAD_FACTOR = 6,
+  MHT_GROWTH_FACTOR = 2,  // must be a power of two
+};
 
 /// Initialize an empty hash table.
 static void mf_hash_init(mf_hashtab_T *mht)

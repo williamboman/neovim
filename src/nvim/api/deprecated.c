@@ -1,7 +1,6 @@
 // This is an open source non-commercial project. Dear PVS-Studio, please check
 // it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 
-#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -11,22 +10,44 @@
 #include "nvim/api/extmark.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
-#include "nvim/api/vim.h"
+#include "nvim/api/private/validate.h"
 #include "nvim/api/vimscript.h"
+#include "nvim/buffer_defs.h"
+#include "nvim/decoration.h"
 #include "nvim/extmark.h"
+#include "nvim/globals.h"
+#include "nvim/highlight.h"
+#include "nvim/highlight_group.h"
 #include "nvim/lua/executor.h"
+#include "nvim/memory.h"
+#include "nvim/option.h"
+#include "nvim/pos.h"
+#include "nvim/types.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/deprecated.c.generated.h"
 #endif
 
+/// @deprecated Use nvim_exec2() instead.
+/// @see nvim_exec2
+String nvim_exec(uint64_t channel_id, String src, Boolean output, Error *err)
+  FUNC_API_SINCE(7)
+  FUNC_API_DEPRECATED_SINCE(11)
+{
+  Dict(exec_opts) opts = { 0 };
+  opts.output = BOOLEAN_OBJ(output);
+  return exec_impl(channel_id, src, &opts, err);
+}
+
 /// @deprecated
-/// @see nvim_exec
+/// @see nvim_exec2
 String nvim_command_output(uint64_t channel_id, String command, Error *err)
   FUNC_API_SINCE(1)
   FUNC_API_DEPRECATED_SINCE(7)
 {
-  return nvim_exec(channel_id, command, true, err);
+  Dict(exec_opts) opts = { 0 };
+  opts.output = BOOLEAN_OBJ(true);
+  return exec_impl(channel_id, command, &opts, err);
 }
 
 /// @deprecated Use nvim_exec_lua() instead.
@@ -155,6 +176,49 @@ Integer nvim_buf_set_virtual_text(Buffer buffer, Integer src_id, Integer line, A
   return src_id;
 }
 
+/// Gets a highlight definition by id. |hlID()|
+///
+/// @deprecated use |nvim_get_hl()| instead
+///
+/// @param hl_id Highlight id as returned by |hlID()|
+/// @param rgb Export RGB colors
+/// @param[out] err Error details, if any
+/// @return Highlight definition map
+/// @see nvim_get_hl_by_name
+Dictionary nvim_get_hl_by_id(Integer hl_id, Boolean rgb, Arena *arena, Error *err)
+  FUNC_API_SINCE(3)
+  FUNC_API_DEPRECATED_SINCE(9)
+{
+  Dictionary dic = ARRAY_DICT_INIT;
+  VALIDATE_INT((syn_get_final_id((int)hl_id) != 0), "highlight id", hl_id, {
+    return dic;
+  });
+  int attrcode = syn_id2attr((int)hl_id);
+  return hl_get_attr_by_id(attrcode, rgb, arena, err);
+}
+
+/// Gets a highlight definition by name.
+///
+/// @deprecated use |nvim_get_hl()| instead
+///
+/// @param name Highlight group name
+/// @param rgb Export RGB colors
+/// @param[out] err Error details, if any
+/// @return Highlight definition map
+/// @see nvim_get_hl_by_id
+Dictionary nvim_get_hl_by_name(String name, Boolean rgb, Arena *arena, Error *err)
+  FUNC_API_SINCE(3)
+  FUNC_API_DEPRECATED_SINCE(9)
+{
+  Dictionary result = ARRAY_DICT_INIT;
+  int id = syn_name2id(name.data);
+
+  VALIDATE_S((id != 0), "highlight name", name.data, {
+    return result;
+  });
+  return nvim_get_hl_by_id(id, rgb, arena, err);
+}
+
 /// Inserts a sequence of lines to a buffer at a certain index
 ///
 /// @deprecated use nvim_buf_set_lines(buffer, lnum, lnum, true, lines)
@@ -190,7 +254,7 @@ String buffer_get_line(Buffer buffer, Integer index, Error *err)
   String rv = { .size = 0 };
 
   index = convert_index(index);
-  Array slice = nvim_buf_get_lines(0, buffer, index, index + 1, true, err);
+  Array slice = nvim_buf_get_lines(0, buffer, index, index + 1, true, NULL, err);
 
   if (!ERROR_SET(err) && slice.size) {
     rv = slice.items[0].data.string;
@@ -263,7 +327,7 @@ ArrayOf(String) buffer_get_line_slice(Buffer buffer,
 {
   start = convert_index(start) + !include_start;
   end = convert_index(end) + include_end;
-  return nvim_buf_get_lines(0, buffer, start, end, false, err);
+  return nvim_buf_get_lines(0, buffer, start, end, false, NULL, err);
 }
 
 /// Replaces a line range on the buffer
@@ -444,4 +508,17 @@ Object vim_del_var(String name, Error *err)
 static int64_t convert_index(int64_t index)
 {
   return index < 0 ? index - 1 : index;
+}
+
+/// Gets the option information for one option
+///
+/// @deprecated Use @ref nvim_get_option_info2 instead.
+///
+/// @param          name Option name
+/// @param[out] err Error details, if any
+/// @return         Option Information
+Dictionary nvim_get_option_info(String name, Error *err)
+  FUNC_API_SINCE(7)
+{
+  return get_vimoption(name, OPT_GLOBAL, curbuf, curwin, err);
 }

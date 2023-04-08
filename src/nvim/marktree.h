@@ -2,13 +2,18 @@
 #define NVIM_MARKTREE_H
 
 #include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "nvim/assert.h"
 #include "nvim/garray.h"
 #include "nvim/map.h"
+#include "nvim/map_defs.h"
 #include "nvim/pos.h"
 #include "nvim/types.h"
+
+struct mtnode_s;
 
 #define MT_MAX_DEPTH 20
 #define MT_BRANCH_FACTOR 10
@@ -17,20 +22,25 @@ typedef struct {
   int32_t row;
   int32_t col;
 } mtpos_t;
+#define mtpos_t(r, c) ((mtpos_t){ .row = (r), .col = (c) })
 
 typedef struct mtnode_s mtnode_t;
-typedef struct {
-  int oldcol;
-  int i;
-} iterstate_t;
 
 typedef struct {
   mtpos_t pos;
   int lvl;
   mtnode_t *node;
   int i;
-  iterstate_t s[MT_MAX_DEPTH];
+  struct {
+    int oldcol;
+    int i;
+  } s[MT_MAX_DEPTH];
+
+  size_t intersect_idx;
+  mtpos_t intersect_pos;
 } MarkTreeIter;
+
+#define marktree_itr_valid(itr) ((itr)->node != NULL)
 
 // Internal storage
 //
@@ -118,8 +128,6 @@ struct mtnode_s {
   mtnode_t *ptr[];
 };
 
-// TODO(bfredl): the iterator is pretty much everpresent, make it part of the
-// tree struct itself?
 typedef struct {
   mtnode_t *root;
   size_t n_keys, n_nodes;

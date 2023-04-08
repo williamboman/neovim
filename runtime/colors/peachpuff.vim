@@ -13,10 +13,14 @@ set background=light
 hi clear
 let g:colors_name = 'peachpuff'
 
-let s:t_Co = exists('&t_Co') && !has('gui_running') ? (&t_Co ? &t_Co : 0) : -1
+let s:t_Co = &t_Co
 
 if (has('termguicolors') && &termguicolors) || has('gui_running')
   let g:terminal_ansi_colors = ['#ffdab9', '#a52a2a', '#c00058', '#cd00cd', '#008b8b', '#2e8b57', '#6a5acd', '#737373', '#406090', '#a52a2a', '#c00058', '#cd00cd', '#008b8b', '#2e8b57', '#6a5acd', '#000000']
+  " Nvim uses g:terminal_color_{0-15} instead
+  for i in range(g:terminal_ansi_colors->len())
+    let g:terminal_color_{i} = g:terminal_ansi_colors[i]
+  endfor
 endif
 hi! link Terminal Normal
 hi! link LineNrAbove LineNr

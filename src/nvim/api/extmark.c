@@ -1,20 +1,30 @@
 // This is an open source non-commercial project. Dear PVS-Studio, please check
 // it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdlib.h>
+#include <string.h>
 
+#include "klib/kvec.h"
+#include "lauxlib.h"
 #include "nvim/api/extmark.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
+#include "nvim/api/private/validate.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/charset.h"
+#include "nvim/decoration.h"
 #include "nvim/decoration_provider.h"
 #include "nvim/drawscreen.h"
 #include "nvim/extmark.h"
 #include "nvim/highlight_group.h"
-#include "nvim/lua/executor.h"
+#include "nvim/mbyte.h"
 #include "nvim/memline.h"
+#include "nvim/memory.h"
+#include "nvim/pos.h"
+#include "nvim/strings.h"
+#include "nvim/vim.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/extmark.c.generated.h"
@@ -31,7 +41,7 @@ void api_extmark_free_all_mem(void)
   map_destroy(String, handle_T)(&namespace_ids);
 }
 
-/// Creates a new \*namespace\* or gets an existing one.
+/// Creates a new namespace or gets an existing one. \*namespace\*
 ///
 /// Namespaces are used for buffer highlights and virtual text, see
 /// |nvim_buf_add_highlight()| and |nvim_buf_set_extmark()|.
@@ -57,7 +67,7 @@ Integer nvim_create_namespace(String name)
   return (Integer)id;
 }
 
-/// Gets existing, non-anonymous namespaces.
+/// Gets existing, non-anonymous |namespace|s.
 ///
 /// @return dict that maps from names to namespace ids.
 Dictionary nvim_get_namespaces(void)
@@ -95,7 +105,16 @@ bool ns_initialized(uint32_t ns)
   return ns < (uint32_t)next_namespace_id;
 }
 
-static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict)
+static Object hl_group_name(int hl_id, bool hl_name)
+{
+  if (hl_name) {
+    return STRING_OBJ(cstr_to_string(syn_id2name(hl_id)));
+  } else {
+    return INTEGER_OBJ(hl_id);
+  }
+}
+
+static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict, bool hl_name)
 {
   Array rv = ARRAY_DICT_INIT;
   if (id) {
@@ -107,6 +126,8 @@ static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict
   if (add_dict) {
     Dictionary dict = ARRAY_DICT_INIT;
 
+    PUT(dict, "ns_id", INTEGER_OBJ((Integer)extmark->ns_id));
+
     PUT(dict, "right_gravity", BOOLEAN_OBJ(extmark->right_gravity));
 
     if (extmark->end_row >= 0) {
@@ -117,8 +138,7 @@ static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict
 
     const Decoration *decor = &extmark->decor;
     if (decor->hl_id) {
-      String name = cstr_to_string((const char *)syn_id2name(decor->hl_id));
-      PUT(dict, "hl_group", STRING_OBJ(name));
+      PUT(dict, "hl_group", hl_group_name(decor->hl_id, hl_name));
       PUT(dict, "hl_eol", BOOLEAN_OBJ(decor->hl_eol));
     }
     if (decor->hl_mode) {
@@ -132,8 +152,7 @@ static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict
         VirtTextChunk *vtc = &decor->virt_text.items[i];
         ADD(chunk, STRING_OBJ(cstr_to_string(vtc->text)));
         if (vtc->hl_id > 0) {
-          ADD(chunk,
-              STRING_OBJ(cstr_to_string((const char *)syn_id2name(vtc->hl_id))));
+          ADD(chunk, hl_group_name(vtc->hl_id, hl_name));
         }
         ADD(chunks, ARRAY_OBJ(chunk));
       }
@@ -162,8 +181,7 @@ static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict
           VirtTextChunk *vtc = &vt->items[j];
           ADD(chunk, STRING_OBJ(cstr_to_string(vtc->text)));
           if (vtc->hl_id > 0) {
-            ADD(chunk,
-                STRING_OBJ(cstr_to_string((const char *)syn_id2name(vtc->hl_id))));
+            ADD(chunk, hl_group_name(vtc->hl_id, hl_name));
           }
           ADD(chunks, ARRAY_OBJ(chunk));
         }
@@ -174,8 +192,42 @@ static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict
       PUT(dict, "virt_lines_leftcol", BOOLEAN_OBJ(virt_lines_leftcol));
     }
 
-    if (decor->hl_id || kv_size(decor->virt_text) || decor->ui_watched) {
+    if (decor->sign_text) {
+      PUT(dict, "sign_text", STRING_OBJ(cstr_to_string(decor->sign_text)));
+    }
+
+    // uncrustify:off
+
+    struct { char *name; const int val; } hls[] = {
+      { "sign_hl_group"      , decor->sign_hl_id       },
+      { "number_hl_group"    , decor->number_hl_id     },
+      { "line_hl_group"      , decor->line_hl_id       },
+      { "cursorline_hl_group", decor->cursorline_hl_id },
+      { NULL, 0 },
+    };
+
+    // uncrustify:on
+
+    for (int j = 0; hls[j].name && hls[j].val; j++) {
+      if (hls[j].val) {
+        PUT(dict, hls[j].name, hl_group_name(hls[j].val, hl_name));
+      }
+    }
+
+    if (decor->sign_text
+        || decor->hl_id
+        || kv_size(decor->virt_text)
+        || decor->ui_watched) {
       PUT(dict, "priority", INTEGER_OBJ(decor->priority));
+    }
+
+    if (decor->conceal) {
+      String name = cstr_to_string((char *)&decor->conceal_char);
+      PUT(dict, "conceal", STRING_OBJ(name));
+    }
+
+    if (decor->spell != kNone) {
+      PUT(dict, "spell", BOOLEAN_OBJ(decor->spell == kTrue));
     }
 
     if (dict.size) {
@@ -186,13 +238,14 @@ static Array extmark_to_array(const ExtmarkInfo *extmark, bool id, bool add_dict
   return rv;
 }
 
-/// Gets the position (0-indexed) of an extmark.
+/// Gets the position (0-indexed) of an |extmark|.
 ///
 /// @param buffer  Buffer handle, or 0 for current buffer
 /// @param ns_id  Namespace id from |nvim_create_namespace()|
 /// @param id  Extmark id
 /// @param opts  Optional parameters. Keys:
 ///          - details: Whether to include the details dict
+///          - hl_name: Whether to include highlight group name instead of id, true if omitted
 /// @param[out] err   Error details, if any
 /// @return 0-indexed (row, col) tuple or empty list () if extmark id was
 /// absent
@@ -209,27 +262,29 @@ ArrayOf(Integer) nvim_buf_get_extmark_by_id(Buffer buffer, Integer ns_id,
     return rv;
   }
 
-  if (!ns_initialized((uint32_t)ns_id)) {
-    api_set_error(err, kErrorTypeValidation, "Invalid ns_id");
+  VALIDATE_INT(ns_initialized((uint32_t)ns_id), "ns_id", ns_id, {
     return rv;
-  }
+  });
 
   bool details = false;
+  bool hl_name = true;
   for (size_t i = 0; i < opts.size; i++) {
     String k = opts.items[i].key;
     Object *v = &opts.items[i].value;
     if (strequal("details", k.data)) {
-      if (v->type == kObjectTypeBoolean) {
-        details = v->data.boolean;
-      } else if (v->type == kObjectTypeInteger) {
-        details = v->data.integer;
-      } else {
-        api_set_error(err, kErrorTypeValidation, "details is not an boolean");
+      details = api_object_to_bool(*v, "details", false, err);
+      if (ERROR_SET(err)) {
+        return rv;
+      }
+    } else if (strequal("hl_name", k.data)) {
+      hl_name = api_object_to_bool(*v, "hl_name", false, err);
+      if (ERROR_SET(err)) {
         return rv;
       }
     } else {
-      api_set_error(err, kErrorTypeValidation, "unexpected key: %s", k.data);
-      return rv;
+      VALIDATE_S(false, "'opts' key", k.data, {
+        return rv;
+      });
     }
   }
 
@@ -237,50 +292,50 @@ ArrayOf(Integer) nvim_buf_get_extmark_by_id(Buffer buffer, Integer ns_id,
   if (extmark.row < 0) {
     return rv;
   }
-  return extmark_to_array(&extmark, false, details);
+  return extmark_to_array(&extmark, false, details, hl_name);
 }
 
-/// Gets extmarks in "traversal order" from a |charwise| region defined by
+/// Gets |extmarks| in "traversal order" from a |charwise| region defined by
 /// buffer positions (inclusive, 0-indexed |api-indexing|).
 ///
 /// Region can be given as (row,col) tuples, or valid extmark ids (whose
 /// positions define the bounds). 0 and -1 are understood as (0,0) and (-1,-1)
 /// respectively, thus the following are equivalent:
-///
-/// <pre>
-///   nvim_buf_get_extmarks(0, my_ns, 0, -1, {})
-///   nvim_buf_get_extmarks(0, my_ns, [0,0], [-1,-1], {})
+/// <pre>lua
+///   vim.api.nvim_buf_get_extmarks(0, my_ns, 0, -1, {})
+///   vim.api.nvim_buf_get_extmarks(0, my_ns, {0,0}, {-1,-1}, {})
 /// </pre>
 ///
 /// If `end` is less than `start`, traversal works backwards. (Useful
 /// with `limit`, to get the first marks prior to a given position.)
 ///
 /// Example:
-///
-/// <pre>
-///   local a   = vim.api
-///   local pos = a.nvim_win_get_cursor(0)
-///   local ns  = a.nvim_create_namespace('my-plugin')
+/// <pre>lua
+///   local api = vim.api
+///   local pos = api.nvim_win_get_cursor(0)
+///   local ns  = api.nvim_create_namespace('my-plugin')
 ///   -- Create new extmark at line 1, column 1.
-///   local m1  = a.nvim_buf_set_extmark(0, ns, 0, 0, {})
+///   local m1  = api.nvim_buf_set_extmark(0, ns, 0, 0, {})
 ///   -- Create new extmark at line 3, column 1.
-///   local m2  = a.nvim_buf_set_extmark(0, ns, 0, 2, {})
+///   local m2  = api.nvim_buf_set_extmark(0, ns, 2, 0, {})
 ///   -- Get extmarks only from line 3.
-///   local ms  = a.nvim_buf_get_extmarks(0, ns, {2,0}, {2,0}, {})
+///   local ms  = api.nvim_buf_get_extmarks(0, ns, {2,0}, {2,0}, {})
 ///   -- Get all marks in this buffer + namespace.
-///   local all = a.nvim_buf_get_extmarks(0, ns, 0, -1, {})
+///   local all = api.nvim_buf_get_extmarks(0, ns, 0, -1, {})
 ///   print(vim.inspect(ms))
 /// </pre>
 ///
 /// @param buffer  Buffer handle, or 0 for current buffer
-/// @param ns_id  Namespace id from |nvim_create_namespace()|
+/// @param ns_id  Namespace id from |nvim_create_namespace()| or -1 for all namespaces
 /// @param start  Start of range: a 0-indexed (row, col) or valid extmark id
 /// (whose position defines the bound). |api-indexing|
 /// @param end  End of range (inclusive): a 0-indexed (row, col) or valid
 /// extmark id (whose position defines the bound). |api-indexing|
 /// @param opts  Optional parameters. Keys:
 ///          - limit:  Maximum number of marks to return
-///          - details Whether to include the details dict
+///          - details: Whether to include the details dict
+///          - hl_name: Whether to include highlight group name instead of id, true if omitted
+///          - type: Filter marks by type: "highlight", "sign", "virt_text" and "virt_lines"
 /// @param[out] err   Error details, if any
 /// @return List of [extmark_id, row, col] tuples in "traversal order".
 Array nvim_buf_get_extmarks(Buffer buffer, Integer ns_id, Object start, Object end, Dictionary opts,
@@ -294,35 +349,60 @@ Array nvim_buf_get_extmarks(Buffer buffer, Integer ns_id, Object start, Object e
     return rv;
   }
 
-  if (!ns_initialized((uint32_t)ns_id)) {
-    api_set_error(err, kErrorTypeValidation, "Invalid ns_id");
-    return rv;
+  bool all_ns;
+  if (ns_id == -1) {
+    all_ns = true;
+  } else {
+    VALIDATE_INT(ns_initialized((uint32_t)ns_id), "ns_id", ns_id, {
+      return rv;
+    });
+    all_ns = false;
   }
 
   Integer limit = -1;
   bool details = false;
+  bool hl_name = true;
+  ExtmarkType type = kExtmarkNone;
 
   for (size_t i = 0; i < opts.size; i++) {
     String k = opts.items[i].key;
     Object *v = &opts.items[i].value;
     if (strequal("limit", k.data)) {
-      if (v->type != kObjectTypeInteger) {
-        api_set_error(err, kErrorTypeValidation, "limit is not an integer");
+      VALIDATE_T("limit", kObjectTypeInteger, v->type, {
         return rv;
-      }
+      });
       limit = v->data.integer;
     } else if (strequal("details", k.data)) {
-      if (v->type == kObjectTypeBoolean) {
-        details = v->data.boolean;
-      } else if (v->type == kObjectTypeInteger) {
-        details = v->data.integer;
-      } else {
-        api_set_error(err, kErrorTypeValidation, "details is not an boolean");
+      details = api_object_to_bool(*v, "details", false, err);
+      if (ERROR_SET(err)) {
         return rv;
       }
+    } else if (strequal("hl_name", k.data)) {
+      hl_name = api_object_to_bool(*v, "hl_name", false, err);
+      if (ERROR_SET(err)) {
+        return rv;
+      }
+    } else if (strequal("type", k.data)) {
+      VALIDATE_EXP(v->type == kObjectTypeString, "type", "String", api_typename(v->type), {
+        return rv;
+      });
+      if (strequal(v->data.string.data, "sign")) {
+        type = kExtmarkSign;
+      } else if (strequal(v->data.string.data, "virt_text")) {
+        type = kExtmarkVirtText;
+      } else if (strequal(v->data.string.data, "virt_lines")) {
+        type = kExtmarkVirtLines;
+      } else if (strequal(v->data.string.data, "highlight")) {
+        type = kExtmarkHighlight;
+      } else {
+        VALIDATE_EXP(false, "type", "sign, virt_text, virt_lines or highlight", v->data.string.data, {
+          return rv;
+        });
+      }
     } else {
-      api_set_error(err, kErrorTypeValidation, "unexpected key: %s", k.data);
-      return rv;
+      VALIDATE_S(false, "'opts' key", k.data, {
+        return rv;
+      });
     }
   }
 
@@ -350,18 +430,18 @@ Array nvim_buf_get_extmarks(Buffer buffer, Integer ns_id, Object start, Object e
     reverse = true;
   }
 
-  ExtmarkInfoArray marks = extmark_get(buf, (uint32_t)ns_id, l_row, l_col,
-                                       u_row, u_col, (int64_t)limit, reverse);
+  ExtmarkInfoArray marks = extmark_get(buf, (uint32_t)ns_id, l_row, l_col, u_row,
+                                       u_col, (int64_t)limit, reverse, all_ns, type);
 
   for (size_t i = 0; i < kv_size(marks); i++) {
-    ADD(rv, ARRAY_OBJ(extmark_to_array(&kv_A(marks, i), true, (bool)details)));
+    ADD(rv, ARRAY_OBJ(extmark_to_array(&kv_A(marks, i), true, (bool)details, hl_name)));
   }
 
   kv_destroy(marks);
   return rv;
 }
 
-/// Creates or updates an extmark.
+/// Creates or updates an |extmark|.
 ///
 /// By default a new extmark is created when no id is passed in, but it is also
 /// possible to create a new mark by passing in a previously unused id or move
@@ -389,11 +469,11 @@ Array nvim_buf_get_extmarks(Buffer buffer, Integer ns_id, Object start, Object e
 ///               - virt_text : virtual text to link to this mark.
 ///                   A list of [text, highlight] tuples, each representing a
 ///                   text chunk with specified highlight. `highlight` element
-///                   can either be a a single highlight group, or an array of
+///                   can either be a single highlight group, or an array of
 ///                   multiple highlight groups that will be stacked
 ///                   (highest priority last). A highlight group can be supplied
 ///                   either as a string or as an integer, the latter which
-///                   can be obtained using |nvim_get_hl_id_by_name|.
+///                   can be obtained using |nvim_get_hl_id_by_name()|.
 ///               - virt_text_pos : position of virtual text. Possible values:
 ///                 - "eol": right after eol character (default)
 ///                 - "overlay": display over the specified column, without
@@ -432,13 +512,13 @@ Array nvim_buf_get_extmarks(Buffer buffer, Integer ns_id, Object start, Object e
 ///                                     column of the window, bypassing
 ///                                     sign and number columns.
 ///
-///               - ephemeral : for use with |nvim_set_decoration_provider|
+///               - ephemeral : for use with |nvim_set_decoration_provider()|
 ///                   callbacks. The mark will only be used for the current
 ///                   redraw cycle, and not be permantently stored in the
 ///                   buffer.
 ///               - right_gravity : boolean that indicates the direction
 ///                   the extmark will be shifted in when new text is inserted
-///                   (true for right, false for left).  defaults to true.
+///                   (true for right, false for left). Defaults to true.
 ///               - end_right_gravity : boolean that indicates the direction
 ///                   the extmark end position (if it exists) will be shifted
 ///                   in when new text is inserted (true for right, false
@@ -496,27 +576,27 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
     goto error;
   }
 
-  if (!ns_initialized((uint32_t)ns_id)) {
-    api_set_error(err, kErrorTypeValidation, "Invalid ns_id");
+  VALIDATE_INT(ns_initialized((uint32_t)ns_id), "ns_id", ns_id, {
     goto error;
-  }
+  });
 
   uint32_t id = 0;
-  if (opts->id.type == kObjectTypeInteger && opts->id.data.integer > 0) {
+  if (HAS_KEY(opts->id)) {
+    VALIDATE_EXP((opts->id.type == kObjectTypeInteger && opts->id.data.integer > 0),
+                 "id", "positive Integer", NULL, {
+      goto error;
+    });
+
     id = (uint32_t)opts->id.data.integer;
-  } else if (HAS_KEY(opts->id)) {
-    api_set_error(err, kErrorTypeValidation, "id is not a positive integer");
-    goto error;
   }
 
   int line2 = -1;
 
   // For backward compatibility we support "end_line" as an alias for "end_row"
   if (HAS_KEY(opts->end_line)) {
-    if (HAS_KEY(opts->end_row)) {
-      api_set_error(err, kErrorTypeValidation, "cannot use both end_row and end_line");
+    VALIDATE(!HAS_KEY(opts->end_row), "%s", "cannot use both 'end_row' and 'end_line'", {
       goto error;
-    }
+    });
     opts->end_row = opts->end_line;
   }
 
@@ -529,31 +609,29 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
   bool strict = true;
   OPTION_TO_BOOL(strict, strict, true);
 
-  if (opts->end_row.type == kObjectTypeInteger) {
-    Integer val = opts->end_row.data.integer;
-    if (val < 0 || (val > buf->b_ml.ml_line_count && strict)) {
-      api_set_error(err, kErrorTypeValidation, "end_row value outside range");
+  if (HAS_KEY(opts->end_row)) {
+    VALIDATE_T("end_row", kObjectTypeInteger, opts->end_row.type, {
       goto error;
-    } else {
-      line2 = (int)val;
-    }
-  } else if (HAS_KEY(opts->end_row)) {
-    api_set_error(err, kErrorTypeValidation, "end_row is not an integer");
-    goto error;
+    });
+
+    Integer val = opts->end_row.data.integer;
+    VALIDATE_RANGE((val >= 0 && !(val > buf->b_ml.ml_line_count && strict)), "end_row", {
+      goto error;
+    });
+    line2 = (int)val;
   }
 
   colnr_T col2 = -1;
-  if (opts->end_col.type == kObjectTypeInteger) {
-    Integer val = opts->end_col.data.integer;
-    if (val < 0 || val > MAXCOL) {
-      api_set_error(err, kErrorTypeValidation, "end_col value outside range");
+  if (HAS_KEY(opts->end_col)) {
+    VALIDATE_T("end_col", kObjectTypeInteger, opts->end_col.type, {
       goto error;
-    } else {
-      col2 = (int)val;
-    }
-  } else if (HAS_KEY(opts->end_col)) {
-    api_set_error(err, kErrorTypeValidation, "end_col is not an integer");
-    goto error;
+    });
+
+    Integer val = opts->end_col.data.integer;
+    VALIDATE_RANGE((val >= 0 && val <= MAXCOL), "end_col", {
+      goto error;
+    });
+    col2 = (int)val;
   }
 
   // uncrustify:off
@@ -583,31 +661,37 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
     }
   }
 
-  if (opts->conceal.type == kObjectTypeString) {
+  if (HAS_KEY(opts->conceal)) {
+    VALIDATE_T("conceal", kObjectTypeString, opts->conceal.type, {
+      goto error;
+    });
+
     String c = opts->conceal.data.string;
     decor.conceal = true;
     if (c.size) {
       decor.conceal_char = utf_ptr2char(c.data);
     }
     has_decor = true;
-  } else if (HAS_KEY(opts->conceal)) {
-    api_set_error(err, kErrorTypeValidation, "conceal is not a String");
-    goto error;
   }
 
-  if (opts->virt_text.type == kObjectTypeArray) {
+  if (HAS_KEY(opts->virt_text)) {
+    VALIDATE_T("virt_text", kObjectTypeArray, opts->virt_text.type, {
+      goto error;
+    });
+
     decor.virt_text = parse_virt_text(opts->virt_text.data.array, err,
                                       &decor.virt_text_width);
     has_decor = true;
     if (ERROR_SET(err)) {
       goto error;
     }
-  } else if (HAS_KEY(opts->virt_text)) {
-    api_set_error(err, kErrorTypeValidation, "virt_text is not an Array");
-    goto error;
   }
 
-  if (opts->virt_text_pos.type == kObjectTypeString) {
+  if (HAS_KEY(opts->virt_text_pos)) {
+    VALIDATE_T("virt_text_pos", kObjectTypeString, opts->virt_text_pos.type, {
+      goto error;
+    });
+
     String str = opts->virt_text_pos.data.string;
     if (strequal("eol", str.data)) {
       decor.virt_text_pos = kVTEndOfLine;
@@ -618,21 +702,19 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
     } else if (strequal("inline", str.data)) {
       decor.virt_text_pos = kVTInline;
     } else {
-      api_set_error(err, kErrorTypeValidation, "virt_text_pos: invalid value");
-      goto error;
+      VALIDATE_S(false, "virt_text_pos", "", {
+        goto error;
+      });
     }
-  } else if (HAS_KEY(opts->virt_text_pos)) {
-    api_set_error(err, kErrorTypeValidation, "virt_text_pos is not a String");
-    goto error;
   }
 
-  if (opts->virt_text_win_col.type == kObjectTypeInteger) {
+  if (HAS_KEY(opts->virt_text_win_col)) {
+    VALIDATE_T("virt_text_win_col", kObjectTypeInteger, opts->virt_text_win_col.type, {
+      goto error;
+    });
+
     decor.col = (int)opts->virt_text_win_col.data.integer;
     decor.virt_text_pos = kVTWinCol;
-  } else if (HAS_KEY(opts->virt_text_win_col)) {
-    api_set_error(err, kErrorTypeValidation,
-                  "virt_text_win_col is not a Number of the correct size");
-    goto error;
   }
 
   OPTION_TO_BOOL(decor.virt_text_hide, virt_text_hide, false);
@@ -647,25 +729,29 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
     } else if (strequal("blend", str.data)) {
       decor.hl_mode = kHlModeBlend;
     } else {
-      api_set_error(err, kErrorTypeValidation,
-                    "virt_text_pos: invalid value");
-      goto error;
+      VALIDATE_S(false, "virt_text_pos", "", {
+        goto error;
+      });
     }
   } else if (HAS_KEY(opts->hl_mode)) {
-    api_set_error(err, kErrorTypeValidation, "hl_mode is not a String");
-    goto error;
+    VALIDATE_T("hl_mode", kObjectTypeString, opts->hl_mode.type, {
+      goto error;
+    });
   }
 
   bool virt_lines_leftcol = false;
   OPTION_TO_BOOL(virt_lines_leftcol, virt_lines_leftcol, false);
 
-  if (opts->virt_lines.type == kObjectTypeArray) {
+  if (HAS_KEY(opts->virt_lines)) {
+    VALIDATE_T("virt_lines", kObjectTypeArray, opts->virt_lines.type, {
+      goto error;
+    });
+
     Array a = opts->virt_lines.data.array;
     for (size_t j = 0; j < a.size; j++) {
-      if (a.items[j].type != kObjectTypeArray) {
-        api_set_error(err, kErrorTypeValidation, "virt_text_line item is not an Array");
+      VALIDATE_T("virt_text_line", kObjectTypeArray, a.items[j].type, {
         goto error;
-      }
+      });
       int dummig;
       VirtText jtem = parse_virt_text(a.items[j].data.array, err, &dummig);
       kv_push(decor.virt_lines, ((struct virt_line){ jtem, virt_lines_leftcol }));
@@ -674,36 +760,33 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
       }
       has_decor = true;
     }
-  } else if (HAS_KEY(opts->virt_lines)) {
-    api_set_error(err, kErrorTypeValidation, "virt_lines is not an Array");
-    goto error;
   }
 
   OPTION_TO_BOOL(decor.virt_lines_above, virt_lines_above, false);
 
-  if (opts->priority.type == kObjectTypeInteger) {
+  if (HAS_KEY(opts->priority)) {
+    VALIDATE_T("priority", kObjectTypeInteger, opts->priority.type, {
+      goto error;
+    });
+
     Integer val = opts->priority.data.integer;
 
-    if (val < 0 || val > UINT16_MAX) {
-      api_set_error(err, kErrorTypeValidation, "priority is not a valid value");
+    VALIDATE_RANGE((val >= 0 && val <= UINT16_MAX), "priority", {
       goto error;
-    }
+    });
     decor.priority = (DecorPriority)val;
-  } else if (HAS_KEY(opts->priority)) {
-    api_set_error(err, kErrorTypeValidation, "priority is not a Number of the correct size");
-    goto error;
   }
 
-  if (opts->sign_text.type == kObjectTypeString) {
-    if (!init_sign_text((char **)&decor.sign_text,
-                        opts->sign_text.data.string.data)) {
-      api_set_error(err, kErrorTypeValidation, "sign_text is not a valid value");
+  if (HAS_KEY(opts->sign_text)) {
+    VALIDATE_T("sign_text", kObjectTypeString, opts->sign_text.type, {
       goto error;
-    }
+    });
+
+    VALIDATE_S(init_sign_text(&decor.sign_text, opts->sign_text.data.string.data),
+               "sign_text", "", {
+      goto error;
+    });
     has_decor = true;
-  } else if (HAS_KEY(opts->sign_text)) {
-    api_set_error(err, kErrorTypeValidation, "sign_text is not a String");
-    goto error;
   }
 
   bool right_gravity = true;
@@ -711,11 +794,10 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
 
   // Only error out if they try to set end_right_gravity without
   // setting end_col or end_row
-  if (line2 == -1 && col2 == -1 && HAS_KEY(opts->end_right_gravity)) {
-    api_set_error(err, kErrorTypeValidation,
-                  "cannot set end_right_gravity without setting end_row or end_col");
+  VALIDATE(!(line2 == -1 && col2 == -1 && HAS_KEY(opts->end_right_gravity)),
+           "%s", "cannot set end_right_gravity without end_row or end_col", {
     goto error;
-  }
+  });
 
   bool end_right_gravity = false;
   OPTION_TO_BOOL(end_right_gravity, end_right_gravity, false);
@@ -725,8 +807,12 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
   bool ephemeral = false;
   OPTION_TO_BOOL(ephemeral, ephemeral, false);
 
-  OPTION_TO_BOOL(decor.spell, spell, false);
-  if (decor.spell) {
+  if (!HAS_KEY(opts->spell)) {
+    decor.spell = kNone;
+  } else {
+    bool spell = false;
+    OPTION_TO_BOOL(spell, spell, false);
+    decor.spell = spell ? kTrue : kFalse;
     has_decor = true;
   }
 
@@ -735,37 +821,35 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
     has_decor = true;
   }
 
-  if (line < 0) {
-    api_set_error(err, kErrorTypeValidation, "line value outside range");
+  VALIDATE_RANGE((line >= 0), "line", {
     goto error;
-  } else if (line > buf->b_ml.ml_line_count) {
-    if (strict) {
-      api_set_error(err, kErrorTypeValidation, "line value outside range");
+  });
+
+  if (line > buf->b_ml.ml_line_count) {
+    VALIDATE_RANGE(!strict, "line", {
       goto error;
-    } else {
-      line = buf->b_ml.ml_line_count;
-    }
+    });
+    line = buf->b_ml.ml_line_count;
   } else if (line < buf->b_ml.ml_line_count) {
-    len = ephemeral ? MAXCOL : STRLEN(ml_get_buf(buf, (linenr_T)line + 1, false));
+    len = ephemeral ? MAXCOL : strlen(ml_get_buf(buf, (linenr_T)line + 1, false));
   }
 
   if (col == -1) {
     col = (Integer)len;
   } else if (col > (Integer)len) {
-    if (strict) {
-      api_set_error(err, kErrorTypeValidation, "col value outside range");
+    VALIDATE_RANGE(!strict, "col", {
       goto error;
-    } else {
-      col = (Integer)len;
-    }
+    });
+    col = (Integer)len;
   } else if (col < -1) {
-    api_set_error(err, kErrorTypeValidation, "col value outside range");
-    goto error;
+    VALIDATE_RANGE(false, "col", {
+      goto error;
+    });
   }
 
   if (col2 >= 0) {
     if (line2 >= 0 && line2 < buf->b_ml.ml_line_count) {
-      len = ephemeral ? MAXCOL : STRLEN(ml_get_buf(buf, (linenr_T)line2 + 1, false));
+      len = ephemeral ? MAXCOL : strlen(ml_get_buf(buf, (linenr_T)line2 + 1, false));
     } else if (line2 == buf->b_ml.ml_line_count) {
       // We are trying to add an extmark past final newline
       len = 0;
@@ -774,19 +858,17 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
       line2 = (int)line;
     }
     if (col2 > (Integer)len) {
-      if (strict) {
-        api_set_error(err, kErrorTypeValidation, "end_col value outside range");
+      VALIDATE_RANGE(!strict, "end_col", {
         goto error;
-      } else {
-        col2 = (int)len;
-      }
+      });
+      col2 = (int)len;
     }
   } else if (line2 >= 0) {
     col2 = 0;
   }
 
   // TODO(bfredl): synergize these two branches even more
-  if (ephemeral && decor_state.buf == buf) {
+  if (ephemeral && decor_state.win && decor_state.win->w_buffer == buf) {
     decor_add_ephemeral((int)line, (int)col, line2, col2, &decor, (uint64_t)ns_id, id);
   } else {
     if (ephemeral) {
@@ -802,12 +884,11 @@ Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer
   return (Integer)id;
 
 error:
-  clear_virttext(&decor.virt_text);
-  xfree(decor.sign_text);
+  decor_clear(&decor);
   return 0;
 }
 
-/// Removes an extmark.
+/// Removes an |extmark|.
 ///
 /// @param buffer Buffer handle, or 0 for current buffer
 /// @param ns_id Namespace id from |nvim_create_namespace()|
@@ -822,10 +903,9 @@ Boolean nvim_buf_del_extmark(Buffer buffer, Integer ns_id, Integer id, Error *er
   if (!buf) {
     return false;
   }
-  if (!ns_initialized((uint32_t)ns_id)) {
-    api_set_error(err, kErrorTypeValidation, "Invalid ns_id");
+  VALIDATE_INT(ns_initialized((uint32_t)ns_id), "ns_id", ns_id, {
     return false;
-  }
+  });
 
   return extmark_del(buf, (uint32_t)ns_id, (uint32_t)id);
 }
@@ -837,9 +917,8 @@ uint32_t src2ns(Integer *src_id)
   }
   if (*src_id < 0) {
     return (((uint32_t)1) << 31) - 1;
-  } else {
-    return (uint32_t)(*src_id);
   }
+  return (uint32_t)(*src_id);
 }
 
 /// Adds a highlight to buffer.
@@ -881,14 +960,13 @@ Integer nvim_buf_add_highlight(Buffer buffer, Integer ns_id, String hl_group, In
     return 0;
   }
 
-  if (line < 0 || line >= MAXLNUM) {
-    api_set_error(err, kErrorTypeValidation, "Line number outside range");
+  VALIDATE_RANGE((line >= 0 && line < MAXLNUM), "line number", {
     return 0;
-  }
-  if (col_start < 0 || col_start > MAXCOL) {
-    api_set_error(err, kErrorTypeValidation, "Column value outside range");
+  });
+  VALIDATE_RANGE((col_start >= 0 && col_start <= MAXCOL), "column", {
     return 0;
-  }
+  });
+
   if (col_end < 0 || col_end > MAXCOL) {
     col_end = MAXCOL;
   }
@@ -923,7 +1001,7 @@ Integer nvim_buf_add_highlight(Buffer buffer, Integer ns_id, String hl_group, In
   return ns_id;
 }
 
-/// Clears namespaced objects (highlights, extmarks, virtual text) from
+/// Clears |namespace|d objects (highlights, |extmarks|, virtual text) from
 /// a region.
 ///
 /// Lines are 0-indexed. |api-indexing|  To clear the namespace in the entire
@@ -944,10 +1022,10 @@ void nvim_buf_clear_namespace(Buffer buffer, Integer ns_id, Integer line_start, 
     return;
   }
 
-  if (line_start < 0 || line_start >= MAXLNUM) {
-    api_set_error(err, kErrorTypeValidation, "Line number outside range");
+  VALIDATE_RANGE((line_start >= 0 && line_start < MAXLNUM), "line number", {
     return;
-  }
+  });
+
   if (line_end < 0 || line_end > MAXLNUM) {
     line_end = MAXLNUM;
   }
@@ -956,13 +1034,13 @@ void nvim_buf_clear_namespace(Buffer buffer, Integer ns_id, Integer line_start, 
                 (int)line_end - 1, MAXCOL);
 }
 
-/// Set or change decoration provider for a namespace
+/// Set or change decoration provider for a |namespace|
 ///
 /// This is a very general purpose interface for having lua callbacks
 /// being triggered during the redraw code.
 ///
-/// The expected usage is to set extmarks for the currently
-/// redrawn buffer. |nvim_buf_set_extmark| can be called to add marks
+/// The expected usage is to set |extmarks| for the currently
+/// redrawn buffer. |nvim_buf_set_extmark()| can be called to add marks
 /// on a per-window or per-lines basis. Use the `ephemeral` key to only
 /// use the mark for the current screen redraw (the callback will be called
 /// again for the next redraw ).
@@ -1028,11 +1106,10 @@ void nvim_set_decoration_provider(Integer ns_id, Dict(set_decoration_provider) *
       continue;
     }
 
-    if (v->type != kObjectTypeLuaRef) {
-      api_set_error(err, kErrorTypeValidation,
-                    "%s is not a function", cbs[i].name);
+    VALIDATE_T(cbs[i].name, kObjectTypeLuaRef, v->type, {
       goto error;
-    }
+    });
+
     *(cbs[i].dest) = v->data.luaref;
     v->data.luaref = LUA_NOREF;
   }
@@ -1045,7 +1122,7 @@ error:
   decor_provider_clear(p);
 }
 
-/// Gets the line and column of an extmark.
+/// Gets the line and column of an |extmark|.
 ///
 /// Extmarks may be queried by position, name or even special names
 /// in the future such as "cursor".
@@ -1069,39 +1146,39 @@ static bool extmark_get_index_from_obj(buf_T *buf, Integer ns_id, Object obj, in
       *col = MAXCOL;
       return true;
     } else if (id < 0) {
-      api_set_error(err, kErrorTypeValidation, "Mark id must be positive");
-      return false;
+      VALIDATE_INT(false, "mark id", id, {
+        return false;
+      });
     }
 
     ExtmarkInfo extmark = extmark_from_id(buf, (uint32_t)ns_id, (uint32_t)id);
-    if (extmark.row >= 0) {
-      *row = extmark.row;
-      *col = extmark.col;
-      return true;
-    } else {
-      api_set_error(err, kErrorTypeValidation, "No mark with requested id");
+
+    VALIDATE_INT((extmark.row >= 0), "mark id (not found)", id, {
       return false;
-    }
+    });
+    *row = extmark.row;
+    *col = extmark.col;
+    return true;
 
     // Check if it is a position
   } else if (obj.type == kObjectTypeArray) {
     Array pos = obj.data.array;
-    if (pos.size != 2
-        || pos.items[0].type != kObjectTypeInteger
-        || pos.items[1].type != kObjectTypeInteger) {
-      api_set_error(err, kErrorTypeValidation,
-                    "Position must have 2 integer elements");
+    VALIDATE_EXP((pos.size == 2
+                  && pos.items[0].type == kObjectTypeInteger
+                  && pos.items[1].type == kObjectTypeInteger),
+                 "mark position", "2 Integer items", NULL, {
       return false;
-    }
+    });
+
     Integer pos_row = pos.items[0].data.integer;
     Integer pos_col = pos.items[1].data.integer;
     *row = (int)(pos_row >= 0 ? pos_row  : MAXLNUM);
     *col = (colnr_T)(pos_col >= 0 ? pos_col : MAXCOL);
     return true;
   } else {
-    api_set_error(err, kErrorTypeValidation,
-                  "Position must be a mark id Integer or position Array");
-    return false;
+    VALIDATE_EXP(false, "mark position", "mark id Integer or 2-item Array", NULL, {
+      return false;
+    });
   }
 }
 // adapted from sign.c:sign_define_init_text.
@@ -1110,7 +1187,7 @@ static int init_sign_text(char **sign_text, char *text)
 {
   char *s;
 
-  char *endp = text + (int)STRLEN(text);
+  char *endp = text + (int)strlen(text);
 
   // Count cells and check for non-printable chars
   int cells = 0;
@@ -1145,17 +1222,14 @@ VirtText parse_virt_text(Array chunks, Error *err, int *width)
   VirtText virt_text = KV_INITIAL_VALUE;
   int w = 0;
   for (size_t i = 0; i < chunks.size; i++) {
-    if (chunks.items[i].type != kObjectTypeArray) {
-      api_set_error(err, kErrorTypeValidation, "Chunk is not an array");
+    VALIDATE_T("chunk", kObjectTypeArray, chunks.items[i].type, {
       goto free_exit;
-    }
+    });
     Array chunk = chunks.items[i].data.array;
-    if (chunk.size == 0 || chunk.size > 2
-        || chunk.items[0].type != kObjectTypeString) {
-      api_set_error(err, kErrorTypeValidation,
-                    "Chunk is not an array with one or two strings");
+    VALIDATE((chunk.size > 0 && chunk.size <= 2 && chunk.items[0].type == kObjectTypeString),
+             "%s", "Invalid chunk: expected Array with 1 or 2 Strings", {
       goto free_exit;
-    }
+    });
 
     String str = chunk.items[0].data.string;
 

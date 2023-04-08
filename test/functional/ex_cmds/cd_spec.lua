@@ -1,6 +1,6 @@
 -- Specs for :cd, :tcd, :lcd and getcwd()
 
-local lfs = require('lfs')
+local luv = require('luv')
 local helpers = require('test.functional.helpers')(after_each)
 
 local eq = helpers.eq
@@ -9,6 +9,9 @@ local clear = helpers.clear
 local command = helpers.command
 local exc_exec = helpers.exc_exec
 local pathsep = helpers.get_pathsep()
+local skip = helpers.skip
+local is_os = helpers.is_os
+local mkdir = helpers.mkdir
 
 -- These directories will be created for testing
 local directories = {
@@ -34,14 +37,14 @@ for _, cmd in ipairs {'cd', 'chdir'} do
     before_each(function()
       clear()
       for _, d in pairs(directories) do
-        lfs.mkdir(d)
+        mkdir(d)
       end
       directories.start = cwd()
     end)
 
     after_each(function()
       for _, d in pairs(directories) do
-        lfs.rmdir(d)
+        luv.fs_rmdir(d)
       end
     end)
 
@@ -271,7 +274,7 @@ end
 describe("getcwd()", function ()
   before_each(function()
     clear()
-    lfs.mkdir(directories.global)
+    mkdir(directories.global)
   end)
 
   after_each(function()
@@ -279,9 +282,7 @@ describe("getcwd()", function ()
   end)
 
   it("returns empty string if working directory does not exist", function()
-    if helpers.iswin() then
-      return
-    end
+    skip(is_os('win'))
     command("cd "..directories.global)
     command("call delete('../"..directories.global.."', 'd')")
     eq("", helpers.eval("getcwd()"))

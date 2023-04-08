@@ -5,9 +5,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "klib/kvec.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/grid_defs.h"
-#include "nvim/lib/kvec.h"
 #include "nvim/macros.h"
 #include "nvim/types.h"
 
@@ -36,7 +36,7 @@ typedef kvec_t(HlMessageChunk) HlMessage;
 /// Message history for `:messages`
 typedef struct msg_hist {
   struct msg_hist *next;  ///< Next message.
-  char_u *msg;            ///< Message text.
+  char *msg;            ///< Message text.
   const char *kind;     ///< Message kind (for msg_ext)
   int attr;               ///< Message highlighting.
   bool multiline;         ///< Multiline message.
@@ -65,6 +65,8 @@ EXTERN ScreenGrid msg_grid_adj INIT(= SCREEN_GRID_INIT);
 
 // value of msg_scrolled at latest msg_scroll_flush.
 EXTERN int msg_scrolled_at_flush INIT(= 0);
+
+EXTERN int msg_grid_scroll_discount INIT(= 0);
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "message.h.generated.h"

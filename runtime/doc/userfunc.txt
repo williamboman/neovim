@@ -12,7 +12,7 @@ This is introduced in section |41.7| of the user manual.
 
 ==============================================================================
 
-1. Defining a fuction ~
+1. Defining a function ~
 						*define-function*
 New functions can be defined.  These can be called just like builtin
 functions.  The function executes a sequence of Ex commands.  Normal mode
@@ -20,7 +20,7 @@ commands can be executed with the |:normal| command.
 
 The function name must start with an uppercase letter, to avoid confusion with
 builtin functions.  To prevent from using the same name in different scripts
-make them script-local.  If you do use a global function the avoid obvious,
+make them script-local.  If you do use a global function then avoid obvious,
 short names.  A good habit is to start the function name with the name of the
 script, e.g., "HTMLcolor()".
 
@@ -180,7 +180,16 @@ See |:verbose-cmd| for more information.
 			the number 0 is returned.
 			Note that there is no check for unreachable lines,
 			thus there is no warning if commands follow ":return".
-
+			Also, there is no check if the following
+			line contains a valid command.  Forgetting the line
+			continuation backslash may go unnoticed: >
+				return 'some text'
+				       .. ' some more text'
+<			Will happily return "some text" without an error.  It
+			should have been: >
+				return 'some text'
+				       \ .. ' some more text'
+<
 			If the ":return" is used after a |:try| but before the
 			matching |:finally| (if present), the commands
 			following the ":finally" up to the matching |:endtry|
@@ -214,7 +223,7 @@ It is allowed to define another function inside a function body.
 You can provide default values for positional named arguments.  This makes
 them optional for function calls.  When a positional argument is not
 specified at a call, the default expression is used to initialize it.
-This only works for functions declared with |function|, not for
+This only works for functions declared with `:function`, not for
 lambda expressions |expr-lambda|.
 
 Example: >
@@ -225,9 +234,10 @@ Example: >
   call Something('key', 20)	"key: 20"
 
 The argument default expressions are evaluated at the time of the function
-call, not definition.  Thus it is possible to use an expression which is
-invalid the moment the function is defined.  The expressions are also only
-evaluated when arguments are not specified during a call.
+call, not when the function is defined.  Thus it is possible to use an
+expression which is invalid the moment the function is defined.  The
+expressions are also only evaluated when arguments are not specified during a
+call.
 
 								*E989*
 Optional arguments with default expressions must occur after any mandatory
@@ -287,7 +297,7 @@ This function can then be called with: >
 <
 ==============================================================================
 
-2. Calling a fuction ~
+2. Calling a function ~
 						*:cal* *:call* *E107* *E117*
 :[range]cal[l] {name}([arguments])
 		Call a function.  The name of the function and its arguments
@@ -343,7 +353,6 @@ is used as a method: >
 
 
 ==============================================================================
-
 3. Automatically loading functions ~
 							*autoload-functions*
 When using many or large functions, it's possible to automatically define them
@@ -388,6 +397,10 @@ file should then define the function like this: >
 	   echo "Done!"
 	endfunction
 
+If the file doesn't exist, Vim will also search in 'packpath' (under "start")
+to allow calling packages' functions from your |vimrc| when the packages have
+not been added to 'runtimepath' yet (see |packages|).
+
 The file name and the name used before the # in the function must match
 exactly, and the defined function must have the name exactly as it will be
 called.
@@ -422,8 +435,7 @@ Also note that if you have two script files, and one calls a function in the
 other and vice versa, before the used function is defined, it won't work.
 Avoid using the autoload functionality at the toplevel.
 
-Hint: If you distribute a bunch of scripts you can pack them together with the
-|vimball| utility.  Also read the user manual |distribute-script|.
+Hint: If you distribute a bunch of scripts read |distribute-script|.
 
 
  vim:tw=78:ts=8:noet:ft=help:norl:

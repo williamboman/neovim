@@ -5,6 +5,7 @@ local command = helpers.command
 local feed = helpers.feed
 local feed_command = helpers.feed_command
 local exec = helpers.exec
+local meths = helpers.meths
 local pesc = helpers.pesc
 
 describe('cmdline', function()
@@ -138,6 +139,104 @@ describe('cmdline', function()
       {0:~                             }|
       {0:~                             }|
       :^                             |
+    ]])
+  end)
+
+  -- oldtest: Test_redraw_in_autocmd()
+  it('cmdline cursor position is correct after :redraw with cmdheight=2', function()
+    local screen = Screen.new(30, 6)
+    screen:set_default_attr_ids({
+      [0] = {bold = true, foreground = Screen.colors.Blue},  -- NonText
+    })
+    screen:attach()
+    exec([[
+      set cmdheight=2
+      autocmd CmdlineChanged * redraw
+    ]])
+    feed(':for i in range(3)<CR>')
+    screen:expect([[
+                                    |
+      {0:~                             }|
+      {0:~                             }|
+      {0:~                             }|
+      :for i in range(3)            |
+      :  ^                           |
+    ]])
+    feed(':let i =')
+    -- Note: this may still be considered broken, ref #18140
+    screen:expect([[
+                                    |
+      {0:~                             }|
+      {0:~                             }|
+      {0:~                             }|
+      :  :let i =^                   |
+                                    |
+    ]])
+  end)
+
+  it("setting 'cmdheight' works after outputting two messages vim-patch:9.0.0665", function()
+    local screen = Screen.new(60, 8)
+    screen:set_default_attr_ids({
+      [0] = {bold = true, foreground = Screen.colors.Blue},  -- NonText
+      [1] = {bold = true, reverse = true},  -- StatusLine
+    })
+    screen:attach()
+    exec([[
+      set cmdheight=1 laststatus=2
+      func EchoTwo()
+        set laststatus=2
+        set cmdheight=5
+        echo 'foo'
+        echo 'bar'
+        set cmdheight=1
+      endfunc
+    ]])
+    feed(':call EchoTwo()')
+    screen:expect([[
+                                                                  |
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {1:[No Name]                                                   }|
+      :call EchoTwo()^                                             |
+    ]])
+    feed('<CR>')
+    screen:expect([[
+      ^                                                            |
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {1:[No Name]                                                   }|
+                                                                  |
+    ]])
+  end)
+
+  -- oldtest: Test_cmdheight_tabline()
+  it("changing 'cmdheight' when there is a tabline", function()
+    local screen = Screen.new(60, 8)
+    screen:set_default_attr_ids({
+      [0] = {bold = true, foreground = Screen.colors.Blue},  -- NonText
+      [1] = {bold = true, reverse = true},  -- StatusLine
+      [2] = {bold = true},  -- TabLineSel
+      [3] = {reverse = true},  -- TabLineFill
+    })
+    screen:attach()
+    meths.set_option('laststatus', 2)
+    meths.set_option('showtabline', 2)
+    meths.set_option('cmdheight', 1)
+    screen:expect([[
+      {2: [No Name] }{3:                                                 }|
+      ^                                                            |
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {0:~                                                           }|
+      {1:[No Name]                                                   }|
+                                                                  |
     ]])
   end)
 end)

@@ -1,9 +1,17 @@
 #ifndef NVIM_DECORATION_H
 #define NVIM_DECORATION_H
 
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include "klib/kvec.h"
 #include "nvim/buffer_defs.h"
 #include "nvim/extmark_defs.h"
+#include "nvim/macros.h"
+#include "nvim/marktree.h"
 #include "nvim/pos.h"
+#include "nvim/types.h"
 
 // actual Decoration data is in extmark_defs.h
 
@@ -29,7 +37,6 @@ typedef enum {
 
 EXTERN const char *const hl_mode_str[] INIT(= { "", "replace", "combine", "blend" });
 
-typedef kvec_t(VirtTextChunk) VirtText;
 #define VIRTTEXT_EMPTY ((VirtText)KV_INITIAL_VALUE)
 
 typedef kvec_t(struct virt_line { VirtText line; bool left_col; }) VirtLines;
@@ -47,12 +54,12 @@ struct Decoration {
   bool hl_eol;
   bool virt_lines_above;
   bool conceal;
-  bool spell;
+  TriState spell;
   // TODO(bfredl): style, etc
   DecorPriority priority;
   int col;  // fixed col value, like win_col
   int virt_text_width;  // width of virt_text
-  char_u *sign_text;
+  char *sign_text;
   int sign_hl_id;
   int number_hl_id;
   int line_hl_id;
@@ -63,7 +70,7 @@ struct Decoration {
   bool ui_watched;  // watched for win_extmark
 };
 #define DECORATION_INIT { KV_INITIAL_VALUE, KV_INITIAL_VALUE, 0, kVTEndOfLine, \
-                          kHlModeUnknown, false, false, false, false, false, \
+                          kHlModeUnknown, false, false, false, false, kNone, \
                           DECOR_PRIORITY_BASE, 0, 0, NULL, 0, 0, 0, 0, 0, false }
 
 typedef struct {
@@ -82,7 +89,7 @@ typedef struct {
 typedef struct {
   MarkTreeIter itr[1];
   kvec_t(DecorRange) active;
-  buf_T *buf;
+  win_T *win;
   int top_row;
   int row;
   int col_until;
@@ -93,7 +100,7 @@ typedef struct {
   int conceal_char;
   int conceal_attr;
 
-  bool spell;
+  TriState spell;
 } DecorState;
 
 EXTERN DecorState decor_state INIT(= { 0 });

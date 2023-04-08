@@ -7,21 +7,25 @@ module.exports = async ({github, context}) => {
   const labels = pr_data.data.labels.map(e => e.name)
 
   const reviewers = new Set()
+  const team_reviewers = new Set()
   if (labels.includes('api')) {
     reviewers.add("bfredl")
-    reviewers.add("muniter")
   }
 
   if (labels.includes('build')) {
-    reviewers.add("jamessan")
+    team_reviewers.add('ci');
   }
 
   if (labels.includes('ci')) {
-    reviewers.add("jamessan")
+    team_reviewers.add('ci');
   }
 
   if (labels.includes('column')) {
     reviewers.add("lewis6991")
+  }
+
+  if (labels.includes('dependencies')) {
+    reviewers.add("jamessan")
   }
 
   if (labels.includes('diagnostic')) {
@@ -30,10 +34,6 @@ module.exports = async ({github, context}) => {
 
   if (labels.includes('diff')) {
     reviewers.add("lewis6991")
-  }
-
-  if (labels.includes('dependencies')) {
-    reviewers.add("jamessan")
   }
 
   if (labels.includes('distribution')) {
@@ -51,20 +51,28 @@ module.exports = async ({github, context}) => {
   if (labels.includes('filetype')) {
     reviewers.add("clason")
     reviewers.add("gpanders")
-  }
-
-  if (labels.includes('gui')) {
-    reviewers.add("glacambre")
-    reviewers.add("smolck")
+    reviewers.add("smjonas")
   }
 
   if (labels.includes('lsp')) {
-    reviewers.add("mfussenegger")
+    team_reviewers.add('lsp');
+  }
+
+  if (labels.includes('platform:nix')) {
+    reviewers.add("teto")
+  }
+
+  if (labels.includes('project-management')) {
+    reviewers.add("bfredl")
+    reviewers.add("justinmk")
+  }
+
+  if (labels.includes('test')) {
+    reviewers.add("justinmk")
   }
 
   if (labels.includes('treesitter')) {
-    reviewers.add("bfredl")
-    reviewers.add("vigoux")
+    team_reviewers.add('treesitter');
   }
 
   if (labels.includes('typo')) {
@@ -88,6 +96,7 @@ module.exports = async ({github, context}) => {
     owner: context.repo.owner,
     repo: context.repo.repo,
     pull_number: context.issue.number,
-    reviewers: Array.from(reviewers)
+    reviewers: Array.from(reviewers),
+    team_reviewers: Array.from(team_reviewers)
   });
 }

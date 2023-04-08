@@ -376,7 +376,7 @@ describe('treesitter highlighting', function()
 
     exec_lua [[
       parser = vim.treesitter.get_parser(0, "c")
-      query = vim.treesitter.parse_query("c", "(declaration) @decl")
+      query = vim.treesitter.query.parse("c", "(declaration) @decl")
 
       local nodes = {}
       for _, node in query:iter_captures(parser:parse()[1]:root(), 0, 0, 19) do
@@ -413,7 +413,7 @@ describe('treesitter highlighting', function()
   it("supports injected languages", function()
     insert([[
     int x = INT_MAX;
-    #define READ_STRING(x, y) (char_u *)read_string((x), (size_t)(y))
+    #define READ_STRING(x, y) (char *)read_string((x), (size_t)(y))
     #define foo void main() { \
                   return 42;  \
                 }
@@ -421,7 +421,7 @@ describe('treesitter highlighting', function()
 
     screen:expect{grid=[[
       int x = INT_MAX;                                                 |
-      #define READ_STRING(x, y) (char_u *)read_string((x), (size_t)(y))|
+      #define READ_STRING(x, y) (char *)read_string((x), (size_t)(y))  |
       #define foo void main() { \                                      |
                     return 42;  \                                      |
                   }                                                    |
@@ -450,7 +450,7 @@ describe('treesitter highlighting', function()
 
     screen:expect{grid=[[
       {3:int} x = {5:INT_MAX};                                                 |
-      #define {5:READ_STRING}(x, y) ({3:char_u} *)read_string((x), ({3:size_t})(y))|
+      #define {5:READ_STRING}(x, y) ({3:char} *)read_string((x), ({3:size_t})(y))  |
       #define foo {3:void} main() { \                                      |
                     {4:return} {5:42};  \                                      |
                   }                                                    |
@@ -473,7 +473,7 @@ describe('treesitter highlighting', function()
   it("supports overriding queries, like ", function()
     insert([[
     int x = INT_MAX;
-    #define READ_STRING(x, y) (char_u *)read_string((x), (size_t)(y))
+    #define READ_STRING(x, y) (char *)read_string((x), (size_t)(y))
     #define foo void main() { \
                   return 42;  \
                 }
@@ -481,15 +481,15 @@ describe('treesitter highlighting', function()
 
     exec_lua [[
       local injection_query = "(preproc_def (preproc_arg) @c) (preproc_function_def value: (preproc_arg) @c)"
-      require('vim.treesitter.query').set_query("c", "highlights", hl_query)
-      require('vim.treesitter.query').set_query("c", "injections", injection_query)
+      vim.treesitter.query.set("c", "highlights", hl_query)
+      vim.treesitter.query.set("c", "injections", injection_query)
 
       vim.treesitter.highlighter.new(vim.treesitter.get_parser(0, "c"))
     ]]
 
     screen:expect{grid=[[
       {3:int} x = {5:INT_MAX};                                                 |
-      #define {5:READ_STRING}(x, y) ({3:char_u} *)read_string((x), ({3:size_t})(y))|
+      #define {5:READ_STRING}(x, y) ({3:char} *)read_string((x), ({3:size_t})(y))  |
       #define foo {3:void} main() { \                                      |
                     {4:return} {5:42};  \                                      |
                   }                                                    |
@@ -567,7 +567,7 @@ describe('treesitter highlighting', function()
   it("supports highlighting with priority", function()
     insert([[
     int x = INT_MAX;
-    #define READ_STRING(x, y) (char_u *)read_string((x), (size_t)(y))
+    #define READ_STRING(x, y) (char *)read_string((x), (size_t)(y))
     #define foo void main() { \
                   return 42;  \
                 }
@@ -575,14 +575,14 @@ describe('treesitter highlighting', function()
 
     exec_lua [[
       local parser = vim.treesitter.get_parser(0, "c")
-      test_hl = vim.treesitter.highlighter.new(parser, {queries = {c = hl_query..'\n((translation_unit) @Error (set! "priority" 101))\n'}})
+      test_hl = vim.treesitter.highlighter.new(parser, {queries = {c = hl_query..'\n((translation_unit) @constant (#set! "priority" 101))\n'}})
     ]]
-    -- expect everything to have Error highlight
+    -- expect everything to have Constant highlight
     screen:expect{grid=[[
       {12:int}{8: x = INT_MAX;}                                                 |
-      {8:#define READ_STRING(x, y) (}{12:char_u}{8: *)read_string((x), (}{12:size_t}{8:)(y))}|
-      {8:#define foo }{12:void}{8: main() { \}                                      |
-      {8:              }{12:return}{8: 42;  \}                                      |
+      {8:#define READ_STRING(x, y) (char *)read_string((x), (size_t)(y))}  |
+      {8:#define foo void main() { \}                                      |
+      {8:              return 42;  \}                                      |
       {8:            }}                                                    |
       ^                                                                 |
       {1:~                                                                }|
@@ -599,15 +599,15 @@ describe('treesitter highlighting', function()
                                                                        |
     ]], attr_ids={
       [1] = {bold = true, foreground = Screen.colors.Blue1};
-      [8] = {foreground = Screen.colors.Grey100, background = Screen.colors.Red};
+      [8] = {foreground = Screen.colors.Magenta1};
       -- bold will not be overwritten at the moment
-      [12] = {background = Screen.colors.Red, bold = true, foreground = Screen.colors.Grey100};
+      [12] = {bold = true, foreground = Screen.colors.Magenta1};
     }}
 
     eq({
-      {capture='Error', priority='101'};
-      {capture='type'};
-    }, exec_lua [[ return vim.treesitter.get_captures_at_position(0, 0, 2) ]])
+      {capture='constant', metadata = { priority='101' }, lang='c' };
+      {capture='type', metadata = { }, lang='c' };
+    }, exec_lua [[ return vim.treesitter.get_captures_at_pos(0, 0, 2) ]])
     end)
 
   it("allows to use captures with dots (don't use fallback when specialization of foo exists)", function()

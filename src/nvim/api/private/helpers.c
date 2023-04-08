@@ -3,37 +3,36 @@
 
 #include <assert.h>
 #include <inttypes.h>
+#include <limits.h>
+#include <msgpack/unpack.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "klib/kvec.h"
 #include "nvim/api/private/converter.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
-#include "nvim/api/vim.h"
 #include "nvim/ascii.h"
-#include "nvim/assert.h"
-#include "nvim/buffer.h"
-#include "nvim/charset.h"
-#include "nvim/eval.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/eval/typval.h"
-#include "nvim/ex_cmds_defs.h"
+#include "nvim/eval/typval_defs.h"
 #include "nvim/ex_eval.h"
-#include "nvim/extmark.h"
+#include "nvim/garray.h"
 #include "nvim/highlight_group.h"
-#include "nvim/lib/kvec.h"
 #include "nvim/lua/executor.h"
 #include "nvim/map.h"
-#include "nvim/map_defs.h"
 #include "nvim/mark.h"
 #include "nvim/memline.h"
 #include "nvim/memory.h"
+#include "nvim/message.h"
 #include "nvim/msgpack_rpc/helpers.h"
+#include "nvim/pos.h"
 #include "nvim/ui.h"
 #include "nvim/version.h"
-#include "nvim/vim.h"
-#include "nvim/window.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/private/funcs_metadata.generated.h"
@@ -151,7 +150,18 @@ bool try_end(Error *err)
       xfree(msg);
     }
   } else if (did_throw) {
-    api_set_error(err, kErrorTypeException, "%s", current_exception->value);
+    if (*current_exception->throw_name != NUL) {
+      if (current_exception->throw_lnum != 0) {
+        api_set_error(err, kErrorTypeException, "%s, line %" PRIdLINENR ": %s",
+                      current_exception->throw_name, current_exception->throw_lnum,
+                      current_exception->value);
+      } else {
+        api_set_error(err, kErrorTypeException, "%s: %s",
+                      current_exception->throw_name, current_exception->value);
+      }
+    } else {
+      api_set_error(err, kErrorTypeException, "%s", current_exception->value);
+    }
     discard_current_exception();
   }
 
@@ -218,6 +228,8 @@ Object dict_set_var(dict_T *dict, String key, Object value, bool del, bool retva
     return rv;
   }
 
+  bool watched = tv_dict_is_watched(dict);
+
   if (del) {
     // Delete the key
     if (di == NULL) {
@@ -225,6 +237,10 @@ Object dict_set_var(dict_T *dict, String key, Object value, bool del, bool retva
       api_set_error(err, kErrorTypeValidation, "Key not found: %s",
                     key.data);
     } else {
+      // Notify watchers
+      if (watched) {
+        tv_dict_watcher_notify(dict, key.data, NULL, &di->di_tv);
+      }
       // Return the old value
       if (retval) {
         rv = vim_to_object(&di->di_tv);
@@ -241,11 +257,16 @@ Object dict_set_var(dict_T *dict, String key, Object value, bool del, bool retva
       return rv;
     }
 
+    typval_T oldtv = TV_INITIAL_VALUE;
+
     if (di == NULL) {
       // Need to create an entry
       di = tv_dict_item_alloc_len(key.data, key.size);
       tv_dict_add(dict, di);
     } else {
+      if (watched) {
+        tv_copy(&di->di_tv, &oldtv);
+      }
       // Return the old value
       if (retval) {
         rv = vim_to_object(&di->di_tv);
@@ -255,6 +276,13 @@ Object dict_set_var(dict_T *dict, String key, Object value, bool del, bool retva
 
     // Update the value
     tv_copy(&tv, &di->di_tv);
+
+    // Notify watchers
+    if (watched) {
+      tv_dict_watcher_notify(dict, key.data, &tv, &oldtv);
+      tv_clear(&oldtv);
+    }
+
     // Clear the temporary variable
     tv_clear(&tv);
   }
@@ -373,7 +401,13 @@ String cbuf_to_string(const char *buf, size_t size)
 String cstrn_to_string(const char *str, size_t maxsize)
   FUNC_ATTR_NONNULL_ALL
 {
-  return cbuf_to_string(str, STRNLEN(str, maxsize));
+  return cbuf_to_string(str, strnlen(str, maxsize));
+}
+
+String cstrn_as_string(char *str, size_t maxsize)
+  FUNC_ATTR_NONNULL_ALL
+{
+  return cbuf_as_string(str, strnlen(str, maxsize));
 }
 
 /// Creates a String using the given C string. Unlike
@@ -444,53 +478,15 @@ Array string_to_array(const String input, bool crlf)
   return ret;
 }
 
-/// Collects `n` buffer lines into array `l`, optionally replacing newlines
-/// with NUL.
-///
-/// @param buf Buffer to get lines from
-/// @param n Number of lines to collect
-/// @param replace_nl Replace newlines ("\n") with NUL
-/// @param start Line number to start from
-/// @param[out] l Lines are copied here
-/// @param err[out] Error, if any
-/// @return true unless `err` was set
-bool buf_collect_lines(buf_T *buf, size_t n, int64_t start, bool replace_nl, Array *l, Error *err)
-{
-  for (size_t i = 0; i < n; i++) {
-    int64_t lnum = start + (int64_t)i;
-
-    if (lnum >= MAXLNUM) {
-      if (err != NULL) {
-        api_set_error(err, kErrorTypeValidation, "Line index is too high");
-      }
-      return false;
-    }
-
-    const char *bufstr = ml_get_buf(buf, (linenr_T)lnum, false);
-    Object str = STRING_OBJ(cstr_to_string(bufstr));
-
-    if (replace_nl) {
-      // Vim represents NULs as NLs, but this may confuse clients.
-      strchrsub(str.data.string.data, '\n', '\0');
-    }
-
-    l->items[i] = str;
-  }
-
-  return true;
-}
-
 /// Returns a substring of a buffer line
 ///
 /// @param buf          Buffer handle
 /// @param lnum         Line number (1-based)
 /// @param start_col    Starting byte offset into line (0-based)
 /// @param end_col      Ending byte offset into line (0-based, exclusive)
-/// @param replace_nl   Replace newlines ('\n') with null ('\0')
 /// @param err          Error object
 /// @return The text between start_col and end_col on line lnum of buffer buf
-String buf_get_text(buf_T *buf, int64_t lnum, int64_t start_col, int64_t end_col, bool replace_nl,
-                    Error *err)
+String buf_get_text(buf_T *buf, int64_t lnum, int64_t start_col, int64_t end_col, Error *err)
 {
   String rv = STRING_INIT;
 
@@ -499,7 +495,7 @@ String buf_get_text(buf_T *buf, int64_t lnum, int64_t start_col, int64_t end_col
     return rv;
   }
 
-  const char *bufstr = ml_get_buf(buf, (linenr_T)lnum, false);
+  char *bufstr = ml_get_buf(buf, (linenr_T)lnum, false);
   size_t line_length = strlen(bufstr);
 
   start_col = start_col < 0 ? (int64_t)line_length + start_col + 1 : start_col;
@@ -519,12 +515,7 @@ String buf_get_text(buf_T *buf, int64_t lnum, int64_t start_col, int64_t end_col
     return rv;
   }
 
-  rv = cstrn_to_string(&bufstr[start_col], (size_t)(end_col - start_col));
-  if (replace_nl) {
-    strchrsub(rv.data, '\n', '\0');
-  }
-
-  return rv;
+  return cstrn_as_string(&bufstr[start_col], (size_t)(end_col - start_col));
 }
 
 void api_free_string(String value)
@@ -830,9 +821,38 @@ int object_to_hl_id(Object obj, const char *what, Error *err)
   } else if (obj.type == kObjectTypeInteger) {
     return MAX((int)obj.data.integer, 0);
   } else {
-    api_set_error(err, kErrorTypeValidation,
-                  "%s is not a valid highlight", what);
+    api_set_error(err, kErrorTypeValidation, "Invalid highlight: %s", what);
     return 0;
+  }
+}
+
+char *api_typename(ObjectType t)
+{
+  switch (t) {
+  case kObjectTypeNil:
+    return "nil";
+  case kObjectTypeBoolean:
+    return "Boolean";
+  case kObjectTypeInteger:
+    return "Integer";
+  case kObjectTypeFloat:
+    return "Float";
+  case kObjectTypeString:
+    return "String";
+  case kObjectTypeArray:
+    return "Array";
+  case kObjectTypeDictionary:
+    return "Dict";
+  case kObjectTypeLuaRef:
+    return "Function";
+  case kObjectTypeBuffer:
+    return "Buffer";
+  case kObjectTypeWindow:
+    return "Window";
+  case kObjectTypeTabpage:
+    return "Tabpage";
+  default:
+    abort();
   }
 }
 
@@ -939,12 +959,14 @@ bool set_mark(buf_T *buf, String name, Integer line, Integer col, Error *err)
 }
 
 /// Get default statusline highlight for window
-const char *get_default_stl_hl(win_T *wp, bool use_winbar)
+const char *get_default_stl_hl(win_T *wp, bool use_winbar, int stc_hl_id)
 {
   if (wp == NULL) {
     return "TabLineFill";
   } else if (use_winbar) {
     return (wp == curwin) ? "WinBar" : "WinBarNC";
+  } else if (stc_hl_id > 0) {
+    return syn_id2name(stc_hl_id);
   } else {
     return (wp == curwin) ? "StatusLine" : "StatusLineNC";
   }

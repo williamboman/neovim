@@ -2,17 +2,24 @@
 // it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 
 #include <assert.h>
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 
+#include "klib/kvec.h"
 #include "nvim/api/private/converter.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/assert.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
 #include "nvim/eval/userfunc.h"
-#include "nvim/lua/converter.h"
+#include "nvim/garray.h"
 #include "nvim/lua/executor.h"
+#include "nvim/memory.h"
+#include "nvim/types.h"
+#include "nvim/vim.h"
 
 /// Helper structure for vim_to_object
 typedef struct {
@@ -42,7 +49,7 @@ typedef struct {
 #define TYPVAL_ENCODE_CONV_STRING(tv, str, len) \
   do { \
     const size_t len_ = (size_t)(len); \
-    const char *const str_ = (const char *)(str); \
+    const char *const str_ = (str); \
     assert(len_ == 0 || str_ != NULL); \
     kvi_push(edata->stack, STRING_OBJ(cbuf_to_string((len_?str_:""), len_))); \
   } while (0)
@@ -351,7 +358,7 @@ bool object_to_vim(Object obj, typval_T *tv, Error *err)
   }
 
   case kObjectTypeLuaRef: {
-    char *name = (char *)register_luafunc(api_new_luaref(obj.data.luaref));
+    char *name = register_luafunc(api_new_luaref(obj.data.luaref));
     tv->v_type = VAR_FUNC;
     tv->vval.v_string = xstrdup(name);
     break;

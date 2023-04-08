@@ -681,13 +681,13 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
   end)
 
   it('can set <expr> mappings whose RHS change dynamically', function()
-    meths.exec([[
+    exec([[
         function! FlipFlop() abort
           if !exists('g:flip') | let g:flip = 0 | endif
           let g:flip = !g:flip
           return g:flip
         endfunction
-        ]], true)
+        ]])
     eq(1, meths.call_function('FlipFlop', {}))
     eq(0, meths.call_function('FlipFlop', {}))
     eq(1, meths.call_function('FlipFlop', {}))
@@ -827,8 +827,12 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
     exec_lua [[
       vim.api.nvim_set_keymap ('n', 'asdf', '', {callback = function() print('jkl;') end })
     ]]
-    assert.truthy(string.match(exec_lua[[return vim.api.nvim_exec(':nmap asdf', true)]],
-                  "^\nn  asdf          <Lua %d+>"))
+    assert.truthy(
+      string.match(
+        exec_lua[[return vim.api.nvim_exec2(':nmap asdf', { output = true }).output]],
+        "^\nn  asdf          <Lua %d+>"
+      )
+    )
   end)
 
   it ('mapcheck() returns lua mapping correctly', function()
@@ -885,7 +889,7 @@ describe('nvim_set_keymap, nvim_del_keymap', function()
     eq({'<space>'}, meths.buf_get_lines(0, 0, -1, false))
   end)
 
-  it('lua expr mapping returning nil is equivalent to returnig an empty string', function()
+  it('lua expr mapping returning nil is equivalent to returning an empty string', function()
     exec_lua [[
       vim.api.nvim_set_keymap ('i', 'aa', '', {callback = function() return nil end, expr = true })
     ]]
@@ -1066,7 +1070,7 @@ describe('nvim_buf_set_keymap, nvim_buf_del_keymap', function()
     eq({'rhs'}, bufmeths.get_lines(0, 0, 1, 1))
   end)
 
-  it("does not crash when setting keymap in a non-existing buffer #13541", function()
+  it("does not crash when setting mapping in a non-existing buffer #13541", function()
     pcall_err(bufmeths.set_keymap, 100, '', 'lsh', 'irhs<Esc>', {})
     helpers.assert_alive()
   end)

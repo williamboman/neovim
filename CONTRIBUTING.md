@@ -11,7 +11,10 @@ low-risk/isolated tasks:
 - Fix bugs found by [Clang](#clang-scan-build), [PVS](#pvs-studio) or
   [Coverity](#coverity).
 - [Improve documentation](#documenting)
-- [Merge a Vim patch] (familiarity with Vim is *strongly* recommended)
+- [Merge a Vim patch] (requires strong familiarity with Vim)
+  - NOTE: read the above link before sending improvements to "runtime files" (anything in `runtime/`).
+    - Vimscript and documentation files are (mostly) maintained by [Vim](https://github.com/vim/vim), not Nvim.
+    - Lua files are maintained by Nvim.
 
 Reporting problems
 ------------------
@@ -30,14 +33,19 @@ Reporting problems
 Developer guidelines
 --------------------
 
-- Read `:help dev` if you are working on Nvim core.
-- Read `:help dev-ui` if you are developing a UI.
-- Read `:help dev-api-client` if you are developing an API client.
+- Read [:help dev](https://neovim.io/doc/user/develop.html#dev) if you are working on Nvim core.
+- Read [:help dev-ui](https://neovim.io/doc/user/develop.html#dev-ui) if you are developing a UI.
+- Read [:help dev-api-client](https://neovim.io/doc/user/develop.html#dev-api-client) if you are developing an API client.
 - Install `ninja` for faster builds of Nvim.
   ```
   sudo apt-get install ninja-build
   make distclean
   make  # Nvim build system uses ninja automatically, if available.
+  ```
+- Install `ccache` for faster rebuilds of Nvim. Nvim will use it automatically
+  if it's found. To disable caching use:
+  ```
+  CCACHE_DISABLE=true make
   ```
 
 Pull requests (PRs)
@@ -47,21 +55,19 @@ Pull requests (PRs)
 - Your PR must include [test coverage][run-tests].
 - Avoid cosmetic changes to unrelated files in the same commit.
 - Use a [feature branch][git-feature-branch] instead of the master branch.
-- Use a **rebase workflow** for small PRs.
-  - After addressing review comments, it's fine to rebase and force-push.
-- Use a **merge workflow** for big, high-risk PRs.
+- Use a _rebase workflow_ for small PRs.
+  - After addressing review comments, it's fine to force-push.
+- Use a _merge workflow_ (as opposed to "rebase") for big, high-risk PRs.
   - Merge `master` into your PR when there are conflicts or when master
     introduces breaking changes.
-  - Use the `ri` git alias:
-    ```
-    [alias]
-    ri = "!sh -c 't=\"${1:-master}\"; s=\"${2:-HEAD}\"; mb=\"$(git merge-base \"$t\" \"$s\")\"; if test \"x$mb\" = x ; then o=\"$t\"; else lm=\"$(git log -n1 --merges \"$t..$s\" --pretty=%H)\"; if test \"x$lm\" = x ; then o=\"$mb\"; else o=\"$lm\"; fi; fi; test $# -gt 0 && shift; test $# -gt 0 && shift; git rebase --interactive \"$o\" \"$@\"'"
-    ```
-    This avoids unnecessary rebases yet still allows you to combine related
-    commits, separate monolithic commits, etc.
   - Do not edit commits that come before the merge commit.
-- During a squash/fixup, use `exec make -C build unittest` between each
-  pick/edit/reword.
+
+### Merging to master
+
+For maintainers: when a PR is ready to merge to master,
+
+- prefer _Squash Merge_ for "single-commit PRs" (when the PR has only one meaningful commit).
+- prefer _Merge_ for "multi-commit PRs" (when the PR has multiple meaningful commits).
 
 ### Stages: Draft and Ready for review
 
@@ -92,7 +98,7 @@ the VCS/git logs more valuable. The general structure of a commit message is:
 ```
 
 - Prefix the commit subject with one of these [_types_](https://github.com/commitizen/conventional-commit-types/blob/master/index.json):
-    - `build`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `test`, `vim-patch`, `dist`
+    - `build`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`, `revert`, `test`, `vim-patch`
     - You can **ignore this for "fixup" commits** or any commits you expect to be squashed.
 - Append optional scope to _type_ such as `(lsp)`, `(treesitter)`, `(float)`, …
 - _Description_ shouldn't start with a capital letter or end in a period.
@@ -115,17 +121,16 @@ Each pull request must pass the automated builds on [Cirrus CI] and [GitHub Acti
 
 - CI builds are compiled with [`-Werror`][gcc-warnings], so compiler warnings
   will fail the build.
-- If any tests fail, the build will fail.
-  See [test/README.md#running-tests][run-tests] to run tests locally.
-  Passing locally doesn't guarantee passing the CI build, because of the
-  different compilers and platforms tested against.
+- If any tests fail, the build will fail. See [test/README.md#running-tests][run-tests] to run tests locally.
 - CI runs [ASan] and other analyzers.
     - To run valgrind locally: `VALGRIND=1 make test`
-    - To run Clang ASan/UBSan locally: `CC=clang make CMAKE_FLAGS="-DCLANG_ASAN_UBSAN=ON"`
+    - To run Clang ASan/UBSan locally: `CC=clang make CMAKE_FLAGS="-DENABLE_ASAN_UBSAN=ON"`
 - The [lint](#lint) build checks modified lines _and their immediate
   neighbors_, to encourage incrementally updating the legacy style to meet our
   [style](#style). (See [#3174][3174] for background.)
 - CI for FreeBSD runs on [Cirrus CI].
+- To see CI results faster in your PR, you can temporarily set `TEST_FILE` in
+  [test.yml](https://github.com/neovim/neovim/blob/e35b9020b16985eee26e942f9a3f6b045bc3809b/.github/workflows/test.yml#L29).
 
 ### Clang scan-build
 
@@ -178,11 +183,11 @@ master build. To view the defects, just request access; you will be approved.
 
 - To build Neovim with sanitizers enabled, use
   ```
-  rm -rf build && CMAKE_EXTRA_FLAGS="-DCMAKE_C_COMPILER=clang -DCLANG_ASAN_UBSAN=1" make
+  rm -rf build && CMAKE_EXTRA_FLAGS="-DCMAKE_C_COMPILER=clang -DENABLE_ASAN_UBSAN=1" make
   ```
 - When running Neovim, use
   ```
-  UBSAN_OPTIONS=print_stacktrace=1 ASAN_OPTIONS=log_path=/tmp/nvim_asan nvim args...
+  UBSAN_OPTIONS=print_stacktrace=1 ASAN_OPTIONS=log_path=/tmp/nvim_asan,handle_abort=1,handle_sigill=1 nvim args...
   ```
 - If Neovim exits unexpectedly, check `/tmp/nvim_asan.{PID}` (or your preferred `log_path`) for log files with error messages.
 
@@ -246,9 +251,15 @@ You can lint a single file (but this will _not_ exclude legacy errors):
 For managing includes in C files, use [include-what-you-use].
 
 - [Install include-what-you-use][include-what-you-use-install]
-- Run with:
+- To see which includes needs fixing use the cmake preset `iwyu`:
   ```
-  make CMAKE_EXTRA_FLAGS=-DCMAKE_C_INCLUDE_WHAT_YOU_USE=include-what-you-use | tee iwyu.txt
+  cmake --preset iwyu
+  cmake --build --preset iwyu
+  ```
+- There's also a make target that automatically fixes the suggestions from
+  IWYU:
+  ```
+  make iwyu
   ```
 
 See [#549][549] for more details.
@@ -283,7 +294,7 @@ If a function in your Lua module should not be documented (e.g. internal functio
 ---@private
 ```
 
-Mark functions that are deprecated as 
+Mark functions that are deprecated as
 ```
 ---@deprecated
 ```

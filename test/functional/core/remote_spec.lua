@@ -3,10 +3,11 @@ local helpers = require('test.functional.helpers')(after_each)
 local clear = helpers.clear
 local command = helpers.command
 local eq = helpers.eq
+local exec_capture = helpers.exec_capture
+local exec_lua = helpers.exec_lua
 local expect = helpers.expect
 local funcs = helpers.funcs
 local insert = helpers.insert
-local meths = helpers.meths
 local new_argv = helpers.new_argv
 local neq = helpers.neq
 local set_session = helpers.set_session
@@ -48,8 +49,8 @@ describe('Remote', function()
       -- our incoming --remote calls.
       local client_starter = spawn(new_argv(), false, nil, true)
       set_session(client_starter)
-      local client_job_id = funcs.jobstart(client_argv)
-      eq({ 0 }, funcs.jobwait({client_job_id}))
+      -- Call jobstart() and jobwait() in the same RPC request to reduce flakiness.
+      eq({ 0 }, exec_lua([[return vim.fn.jobwait({ vim.fn.jobstart(...) })]], client_argv))
       client_starter:close()
       set_session(server)
     end
@@ -100,7 +101,7 @@ describe('Remote', function()
     expect(contents)
     eq(1, #funcs.getbufinfo())
     -- Since we didn't pass silent, we should get a complaint
-    neq(nil, string.find(meths.exec('messages', true), 'E247'))
+    neq(nil, string.find(exec_capture('messages'), 'E247:'))
   end)
 
   it('creates server if not found with tabs', function()
@@ -109,7 +110,7 @@ describe('Remote', function()
     eq(2, #funcs.gettabinfo())
     eq(2, #funcs.getbufinfo())
     -- We passed silent, so no message should be issued about the server not being found
-    eq(nil, string.find(meths.exec('messages', true), 'E247'))
+    eq(nil, string.find(exec_capture('messages'), 'E247:'))
   end)
 
   pending('exits with error on', function()
@@ -121,8 +122,8 @@ describe('Remote', function()
       -- the event loop. If the server event loop is blocked, it can't process
       -- our incoming --remote calls.
       clear()
-      local bogus_job_id = funcs.jobstart(bogus_argv)
-      eq({2}, funcs.jobwait({bogus_job_id}))
+      -- Call jobstart() and jobwait() in the same RPC request to reduce flakiness.
+      eq({ 2 }, exec_lua([[return vim.fn.jobwait({ vim.fn.jobstart(...) })]], bogus_argv))
     end
     it('bogus subcommand', function()
       run_and_check_exit_code('--remote-bogus')

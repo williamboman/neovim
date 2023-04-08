@@ -11,6 +11,7 @@ local insert = helpers.insert
 local feed = helpers.feed
 local clear = helpers.clear
 local command = helpers.command
+local exec = helpers.exec
 local meths = helpers.meths
 local assert_alive = helpers.assert_alive
 
@@ -101,12 +102,27 @@ describe('API/extmarks', function()
     ns2 = request('nvim_create_namespace', "my-fancy-plugin2")
   end)
 
+  it('validation', function()
+    eq("Invalid 'end_col': expected Integer, got Array", pcall_err(set_extmark, ns, marks[2], 0, 0, { end_col = {}, end_row = 1 }))
+    eq("Invalid 'end_row': expected Integer, got Array", pcall_err(set_extmark, ns, marks[2], 0, 0, { end_col = 1, end_row = {} }))
+    eq("Invalid 'id': expected positive Integer", pcall_err(set_extmark, ns, {}, 0, 0, { end_col = 1, end_row = 1 }))
+    eq("Invalid mark position: expected 2 Integer items", pcall_err(get_extmarks, ns, {}, {-1, -1}))
+    eq("Invalid mark position: expected mark id Integer or 2-item Array", pcall_err(get_extmarks, ns, true, {-1, -1}))
+    -- No memory leak with virt_text, virt_lines, sign_text
+    eq("right_gravity is not a boolean", pcall_err(set_extmark, ns, marks[2], 0, 0, {
+      virt_text = {{'foo', 'Normal'}},
+      virt_lines = {{{'bar', 'Normal'}}},
+      sign_text = 'a',
+      right_gravity = 'baz',
+    }))
+  end)
+
   it("can end extranges past final newline using end_col = 0", function()
     set_extmark(ns, marks[1], 0, 0, {
       end_col = 0,
       end_row = 1
     })
-    eq("end_col value outside range",
+    eq("Invalid 'end_col': out of range",
        pcall_err(set_extmark, ns, marks[2], 0, 0, { end_col = 1, end_row = 1 }))
   end)
 
@@ -1046,7 +1062,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[3], 0, 4, 0, 8)
   end)
 
-  it('substitions over multiple lines with newline in pattern', function()
+  it('substitutes over multiple lines with newline in pattern', function()
     feed('A<cr>67890<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 3)
     set_extmark(ns, marks[2], 0, 4)
@@ -1078,7 +1094,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[6], 1, 2, 0, 5)
   end)
 
-  it('substitions with multiple newlines in pattern', function()
+  it('substitutes with multiple newlines in pattern', function()
     feed('A<cr>67890<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 4)
     set_extmark(ns, marks[2], 0, 5)
@@ -1093,7 +1109,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[5], 2, 0, 0, 6)
   end)
 
-  it('substitions over multiple lines with replace in substition', function()
+  it('substitutes over multiple lines with replace in substitution', function()
     feed('A<cr>67890<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 1)
     set_extmark(ns, marks[2], 0, 2)
@@ -1111,7 +1127,7 @@ describe('API/extmarks', function()
     eq({1, 3}, get_extmark_by_id(ns, marks[3]))
   end)
 
-  it('substitions over multiple lines with replace in substition', function()
+  it('substitutes over multiple lines with replace in substitution', function()
     feed('A<cr>x3<cr>xx<esc>')
     set_extmark(ns, marks[1], 1, 0)
     set_extmark(ns, marks[2], 1, 1)
@@ -1122,7 +1138,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[3], 1, 2, 2, 0)
   end)
 
-  it('substitions over multiple lines with replace in substition', function()
+  it('substitutes over multiple lines with replace in substitution', function()
     feed('A<cr>x3<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 1)
     set_extmark(ns, marks[2], 0, 2)
@@ -1140,7 +1156,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[3], 0, 4, 1, 3)
   end)
 
-  it('substitions with newline in match and sub, delta is 0', function()
+  it('substitutes with newline in match and sub, delta is 0', function()
     feed('A<cr>67890<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 3)
     set_extmark(ns, marks[2], 0, 4)
@@ -1157,7 +1173,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[6], 2, 0, 2, 0)
   end)
 
-  it('substitions with newline in match and sub, delta > 0', function()
+  it('substitutes with newline in match and sub, delta > 0', function()
     feed('A<cr>67890<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 3)
     set_extmark(ns, marks[2], 0, 4)
@@ -1174,7 +1190,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[6], 2, 0, 3, 0)
   end)
 
-  it('substitions with newline in match and sub, delta < 0', function()
+  it('substitutes with newline in match and sub, delta < 0', function()
     feed('A<cr>67890<cr>xx<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 3)
     set_extmark(ns, marks[2], 0, 4)
@@ -1193,7 +1209,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[7], 3, 0, 2, 0)
   end)
 
-  it('substitions with backrefs, newline inserted into sub', function()
+  it('substitutes with backrefs, newline inserted into sub', function()
     feed('A<cr>67890<cr>xx<cr>xx<esc>')
     set_extmark(ns, marks[1], 0, 3)
     set_extmark(ns, marks[2], 0, 4)
@@ -1210,7 +1226,7 @@ describe('API/extmarks', function()
     check_undo_redo(ns, marks[6], 2, 0, 3, 0)
   end)
 
-  it('substitions a ^', function()
+  it('substitutes a ^', function()
     set_extmark(ns, marks[1], 0, 0)
     set_extmark(ns, marks[2], 0, 1)
     feed([[:s:^:x<cr>]])
@@ -1344,10 +1360,10 @@ describe('API/extmarks', function()
 
   it('throws consistent error codes', function()
     local ns_invalid = ns2 + 1
-    eq("Invalid ns_id", pcall_err(set_extmark, ns_invalid, marks[1], positions[1][1], positions[1][2]))
-    eq("Invalid ns_id", pcall_err(curbufmeths.del_extmark, ns_invalid, marks[1]))
-    eq("Invalid ns_id", pcall_err(get_extmarks, ns_invalid, positions[1], positions[2]))
-    eq("Invalid ns_id", pcall_err(get_extmark_by_id, ns_invalid, marks[1]))
+    eq("Invalid 'ns_id': 3", pcall_err(set_extmark, ns_invalid, marks[1], positions[1][1], positions[1][2]))
+    eq("Invalid 'ns_id': 3", pcall_err(curbufmeths.del_extmark, ns_invalid, marks[1]))
+    eq("Invalid 'ns_id': 3", pcall_err(get_extmarks, ns_invalid, positions[1], positions[2]))
+    eq("Invalid 'ns_id': 3", pcall_err(get_extmark_by_id, ns_invalid, marks[1]))
   end)
 
   it('when col = line-length, set the mark on eol', function()
@@ -1362,13 +1378,13 @@ describe('API/extmarks', function()
 
   it('when col = line-length, set the mark on eol', function()
     local invalid_col = init_text:len() + 1
-    eq("col value outside range", pcall_err(set_extmark, ns, marks[1], 0, invalid_col))
+    eq("Invalid 'col': out of range", pcall_err(set_extmark, ns, marks[1], 0, invalid_col))
   end)
 
   it('fails when line > line_count', function()
     local invalid_col = init_text:len() + 1
     local invalid_lnum = 3
-    eq('line value outside range', pcall_err(set_extmark, ns, marks[1], invalid_lnum, invalid_col))
+    eq("Invalid 'line': out of range", pcall_err(set_extmark, ns, marks[1], invalid_lnum, invalid_col))
     eq({}, get_extmark_by_id(ns, marks[1]))
   end)
 
@@ -1397,13 +1413,13 @@ describe('API/extmarks', function()
     eq({{id, 1, 0}}, bufmeths.get_extmarks(buf, ns, 0, -1, {}))
   end)
 
-  it('does not crash with append/delete/undo seqence', function()
-    meths.exec([[
+  it('does not crash with append/delete/undo sequence', function()
+    exec([[
       let ns = nvim_create_namespace('myplugin')
       call nvim_buf_set_extmark(0, ns, 0, 0, {})
       call append(0, '')
       %delete
-      undo]],false)
+      undo]])
     assert_alive()
   end)
 
@@ -1435,7 +1451,7 @@ describe('API/extmarks', function()
 
     feed('u')
     -- handles pasting
-    meths.exec([[let @a='asdfasdf']], false)
+    exec([[let @a='asdfasdf']])
     feed([["ap]])
     eq({ {1, 0, 0}, {2, 0, 8} },
         meths.buf_get_extmarks(0, ns, 0, -1, {}))
@@ -1447,6 +1463,7 @@ describe('API/extmarks', function()
       end_line = 1
     })
     eq({ {1, 0, 0, {
+      ns_id = 1,
       end_col = 0,
       end_row = 1,
       right_gravity = true,
@@ -1454,22 +1471,37 @@ describe('API/extmarks', function()
     }} }, get_extmarks(ns, 0, -1, {details=true}))
   end)
 
+  it('in prompt buffer', function()
+    feed('dd')
+    local id = set_extmark(ns, marks[1], 0, 0, {})
+    curbufmeths.set_option('buftype', 'prompt')
+    feed('i<esc>')
+    eq({{id, 0, 2}}, get_extmarks(ns, 0, -1))
+  end)
+
   it('can get details', function()
     set_extmark(ns, marks[1], 0, 0, {
+      conceal = "c",
+      cursorline_hl_group = "Statement",
       end_col = 0,
-      end_row = 1,
-      right_gravity = false,
       end_right_gravity = true,
-      priority = 0,
+      end_row = 1,
       hl_eol = true,
-      hl_mode = "blend",
       hl_group = "String",
-      virt_text = { { "text", "Statement" } },
-      virt_text_pos = "right_align",
-      virt_text_hide = true,
+      hl_mode = "blend",
+      line_hl_group = "Statement",
+      number_hl_group = "Statement",
+      priority = 0,
+      right_gravity = false,
+      sign_hl_group = "Statement",
+      sign_text = ">>",
+      spell = true,
       virt_lines = { { { "lines", "Statement" } }},
       virt_lines_above = true,
       virt_lines_leftcol = true,
+      virt_text = { { "text", "Statement" } },
+      virt_text_hide = true,
+      virt_text_pos = "right_align",
     })
     set_extmark(ns, marks[2], 0, 0, {
       priority = 0,
@@ -1477,22 +1509,31 @@ describe('API/extmarks', function()
       virt_text_win_col = 1,
     })
     eq({0, 0, {
+      conceal = "c",
+      cursorline_hl_group = "Statement",
       end_col = 0,
-      end_row = 1,
-      right_gravity = false,
       end_right_gravity = true,
-      priority = 0,
+      end_row = 1,
       hl_eol = true,
-      hl_mode = "blend",
       hl_group = "String",
-      virt_text = { { "text", "Statement" } },
-      virt_text_pos = "right_align",
-      virt_text_hide = true,
+      hl_mode = "blend",
+      line_hl_group = "Statement",
+      ns_id = 1,
+      number_hl_group = "Statement",
+      priority = 0,
+      right_gravity = false,
+      sign_hl_group = "Statement",
+      sign_text = ">>",
+      spell = true,
       virt_lines = { { { "lines", "Statement" } }},
       virt_lines_above = true,
       virt_lines_leftcol = true,
+      virt_text = { { "text", "Statement" } },
+      virt_text_hide = true,
+      virt_text_pos = "right_align",
     } }, get_extmark_by_id(ns, marks[1], { details = true }))
     eq({0, 0, {
+      ns_id = 1,
       right_gravity = true,
       priority = 0,
       virt_text = { { "text", "Statement" } },
@@ -1500,6 +1541,29 @@ describe('API/extmarks', function()
       virt_text_pos = "win_col",
       virt_text_win_col = 1,
     } }, get_extmark_by_id(ns, marks[2], { details = true }))
+  end)
+
+  it('can get marks from anonymous namespaces', function()
+    ns = request('nvim_create_namespace', "")
+    ns2 = request('nvim_create_namespace', "")
+    set_extmark(ns, 1, 0, 0, {})
+    set_extmark(ns2, 2, 1, 0, {})
+    eq({{ 1, 0, 0, { ns_id = ns, right_gravity = true }},
+        { 2, 1, 0, { ns_id = ns2, right_gravity = true }}},
+        get_extmarks(-1, 0, -1, { details = true }))
+  end)
+
+  it('can filter by extmark properties', function()
+    set_extmark(ns, 1, 0, 0, {})
+    set_extmark(ns, 2, 0, 0, { hl_group = 'Normal' })
+    set_extmark(ns, 3, 0, 0, { sign_text = '>>' })
+    set_extmark(ns, 4, 0, 0, { virt_text = {{'text', 'Normal'}}})
+    set_extmark(ns, 5, 0, 0, { virt_lines = {{{ 'line', 'Normal' }}}})
+    eq(5, #get_extmarks(-1, 0, -1, { details = true }))
+    eq({{ 2, 0, 0 }}, get_extmarks(-1, 0, -1, { type = 'highlight' }))
+    eq({{ 3, 0, 0 }}, get_extmarks(-1, 0, -1, { type = 'sign' }))
+    eq({{ 4, 0, 0 }}, get_extmarks(-1, 0, -1, { type = 'virt_text' }))
+    eq({{ 5, 0, 0 }}, get_extmarks(-1, 0, -1, { type = 'virt_lines' }))
   end)
 end)
 

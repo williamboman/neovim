@@ -12,6 +12,7 @@ local meths = helpers.meths
 local nvim = helpers.nvim
 local source = helpers.source
 local command = helpers.command
+local exec_capture = helpers.exec_capture
 local pcall_err = helpers.pcall_err
 
 describe('maparg()', function()
@@ -175,14 +176,12 @@ describe('mapset()', function()
 
   it('can restore mapping description from the dict returned by maparg()', function()
     meths.set_keymap('n', 'lhs', 'rhs', {desc = 'map description'})
-    eq('\nn  lhs           rhs\n                 map description',
-       helpers.exec_capture("nmap lhs"))
+    eq('\nn  lhs           rhs\n                 map description', exec_capture("nmap lhs"))
     local mapargs = funcs.maparg('lhs', 'n', false, true)
-    meths.del_keymap('n', 'lhs')
-    eq('\nNo mapping found', helpers.exec_capture("nmap lhs"))
+    meths.set_keymap('n', 'lhs', 'rhs', {desc = 'MAP DESCRIPTION'})
+    eq('\nn  lhs           rhs\n                 MAP DESCRIPTION', exec_capture("nmap lhs"))
     funcs.mapset('n', false, mapargs)
-    eq('\nn  lhs           rhs\n                 map description',
-       helpers.exec_capture("nmap lhs"))
+    eq('\nn  lhs           rhs\n                 map description', exec_capture("nmap lhs"))
   end)
 
   it('can restore "replace_keycodes" from the dict returned by maparg()', function()
@@ -196,6 +195,22 @@ describe('mapset()', function()
     funcs.mapset('i', false, mapargs)
     feed('foo')
     expect('<<lt><')
+  end)
+
+  it('replaces an abbreviation of the same lhs #20320', function()
+    command('inoreabbr foo bar')
+    eq('\ni  foo         * bar', exec_capture('iabbr foo'))
+    feed('ifoo ')
+    expect('bar ')
+    local mapargs = funcs.maparg('foo', 'i', true, true)
+    command('inoreabbr foo BAR')
+    eq('\ni  foo         * BAR', exec_capture('iabbr foo'))
+    feed('foo ')
+    expect('bar BAR ')
+    funcs.mapset('i', true, mapargs)
+    eq('\ni  foo         * bar', exec_capture('iabbr foo'))
+    feed('foo<Esc>')
+    expect('bar BAR bar')
   end)
 
   it('can restore Lua callback from the dict returned by maparg()', function()
@@ -231,9 +246,9 @@ describe('mapset()', function()
   end)
 
   it('does not leak memory if lhs is missing', function()
-    eq('Error executing lua: Vim:E460: entries missing in mapset() dict argument',
+    eq('Vim:E460: entries missing in mapset() dict argument',
        pcall_err(exec_lua, [[vim.fn.mapset('n', false, {rhs = 'foo'})]]))
-    eq('Error executing lua: Vim:E460: entries missing in mapset() dict argument',
+    eq('Vim:E460: entries missing in mapset() dict argument',
        pcall_err(exec_lua, [[vim.fn.mapset('n', false, {callback = function() end})]]))
   end)
 end)

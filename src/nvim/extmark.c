@@ -29,20 +29,21 @@
 // code for redrawing the line with the deleted decoration.
 
 #include <assert.h>
+#include <sys/types.h>
 
-#include "nvim/api/extmark.h"
 #include "nvim/buffer.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/buffer_updates.h"
-#include "nvim/charset.h"
 #include "nvim/decoration.h"
 #include "nvim/extmark.h"
+#include "nvim/extmark_defs.h"
 #include "nvim/globals.h"
-#include "nvim/lib/kbtree.h"
 #include "nvim/map.h"
+#include "nvim/marktree.h"
 #include "nvim/memline.h"
+#include "nvim/memory.h"
 #include "nvim/pos.h"
 #include "nvim/undo.h"
-#include "nvim/vim.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "extmark.c.generated.h"
@@ -71,7 +72,7 @@ void extmark_set(buf_T *buf, uint32_t ns_id, uint32_t *idp, int row, colnr_T col
         || decor->conceal
         || decor_has_sign(decor)
         || decor->ui_watched
-        || decor->spell) {
+        || decor->spell != kNone) {
       decor_full = true;
       decor = xmemdup(decor, sizeof *decor);
     }
@@ -91,7 +92,7 @@ void extmark_set(buf_T *buf, uint32_t ns_id, uint32_t *idp, int row, colnr_T col
         extmark_del(buf, ns_id, id);
       } else {
         // TODO(bfredl): we need to do more if "revising" a decoration mark.
-        assert(itr->node);
+        assert(marktree_itr_valid(itr));
         if (old_mark.pos.row == row && old_mark.pos.col == col) {
           if (marktree_decor_level(old_mark) > kDecorLevelNone) {
             decor_remove(buf, row, row, old_mark.decor_full);
@@ -112,6 +113,7 @@ void extmark_set(buf_T *buf, uint32_t ns_id, uint32_t *idp, int row, colnr_T col
           marktree_revise(buf->b_marktree, itr, decor_level, old_mark);
           goto revised;
         }
+        decor_remove(buf, old_mark.pos.row, old_mark.pos.row, old_mark.decor_full);
         marktree_del_itr(buf->b_marktree, itr, false);
       }
     } else {
@@ -150,6 +152,7 @@ revised:
       buf->b_signs++;
     }
     if (decor->sign_text) {
+      buf->b_signs_with_text++;
       // TODO(lewis6991): smarter invalidation
       buf_signcols_add_check(buf, NULL);
     }
@@ -188,12 +191,12 @@ bool extmark_del(buf_T *buf, uint32_t ns_id, uint32_t id)
     return false;
   }
   assert(key.pos.row >= 0);
-  marktree_del_itr(buf->b_marktree, itr, false);
+  uint64_t other = marktree_del_itr(buf->b_marktree, itr, false);
 
   mtkey_t key2 = key;
 
-  if (mt_paired(key)) {
-    key2 = marktree_lookup_ns(buf->b_marktree, ns_id, id, true, itr);
+  if (other) {
+    key2 = marktree_lookup(buf->b_marktree, other, itr);
     assert(key2.pos.row >= 0);
     marktree_del_itr(buf->b_marktree, itr, false);
   }
@@ -255,8 +258,11 @@ bool extmark_clear(buf_T *buf, uint32_t ns_id, int l_row, colnr_T l_col, int u_r
     assert(mark.ns > 0 && mark.id > 0);
     if (mark.ns == ns_id || all_ns) {
       marks_cleared = true;
+      if (mark.decor_full && !mt_paired(mark)) {  // if paired: deal with it later
+        decor_remove(buf, mark.pos.row, mark.pos.row, mark.decor_full);
+      }
+      uint64_t other = marktree_del_itr(buf->b_marktree, itr, false);
       if (mt_paired(mark)) {
-        uint64_t other = mt_lookup_id(mark.ns, mark.id, !mt_end(mark));
         ssize_t decor_id = -1;
         if (marktree_decor_level(mark) > kDecorLevelNone) {
           // Save the decoration and the first pos. Clear the decoration
@@ -266,10 +272,7 @@ bool extmark_clear(buf_T *buf, uint32_t ns_id, int l_row, colnr_T l_col, int u_r
                   ((DecorItem) { .row1 = mark.pos.row }));
         }
         map_put(uint64_t, ssize_t)(&delete_set, other, decor_id);
-      } else if (mark.decor_full) {
-        decor_remove(buf, mark.pos.row, mark.pos.row, mark.decor_full);
       }
-      marktree_del_itr(buf->b_marktree, itr, false);
     } else {
       marktree_itr_next(buf->b_marktree, itr);
     }
@@ -278,7 +281,7 @@ bool extmark_clear(buf_T *buf, uint32_t ns_id, int l_row, colnr_T l_col, int u_r
   ssize_t decor_id;
   map_foreach(&delete_set, id, decor_id, {
     mtkey_t mark = marktree_lookup(buf->b_marktree, id, itr);
-    assert(itr->node);
+    assert(marktree_itr_valid(itr));
     marktree_del_itr(buf->b_marktree, itr, false);
     if (decor_id >= 0) {
       DecorItem it = kv_A(decors, decor_id);
@@ -298,12 +301,13 @@ bool extmark_clear(buf_T *buf, uint32_t ns_id, int l_row, colnr_T l_col, int u_r
 /// dir can be set to control the order of the array
 /// amount = amount of marks to find or -1 for all
 ExtmarkInfoArray extmark_get(buf_T *buf, uint32_t ns_id, int l_row, colnr_T l_col, int u_row,
-                             colnr_T u_col, int64_t amount, bool reverse)
+                             colnr_T u_col, int64_t amount, bool reverse, bool all_ns,
+                             ExtmarkType type_filter)
 {
   ExtmarkInfoArray array = KV_INITIAL_VALUE;
   MarkTreeIter itr[1];
   // Find all the marks
-  marktree_itr_get_ext(buf->b_marktree, (mtpos_t){ l_row, l_col },
+  marktree_itr_get_ext(buf->b_marktree, mtpos_t(l_row, l_col),
                        itr, reverse, false, NULL);
   int order = reverse ? -1 : 1;
   while ((int64_t)kv_size(array) < amount) {
@@ -317,7 +321,25 @@ ExtmarkInfoArray extmark_get(buf_T *buf, uint32_t ns_id, int l_row, colnr_T l_co
       goto next_mark;
     }
 
-    if (mark.ns == ns_id) {
+    uint16_t type_flags = kExtmarkNone;
+    if (type_filter != kExtmarkNone) {
+      Decoration *decor = mark.decor_full;
+      if (decor && (decor->sign_text || decor->number_hl_id)) {
+        type_flags |= kExtmarkSign;
+      }
+      if (decor && decor->virt_text.size) {
+        type_flags |= kExtmarkVirtText;
+      }
+      if (decor && decor->virt_lines.size) {
+        type_flags |= kExtmarkVirtLines;
+      }
+      if ((decor && (decor->line_hl_id || decor->cursorline_hl_id))
+          || mark.hl_id) {
+        type_flags |= kExtmarkHighlight;
+      }
+    }
+
+    if ((all_ns || mark.ns == ns_id) && type_flags & type_filter) {
       mtkey_t end = marktree_get_alt(buf->b_marktree, mark, NULL);
       kv_push(array, ((ExtmarkInfo) { .ns_id = mark.ns,
                                       .mark_id = mark.id,

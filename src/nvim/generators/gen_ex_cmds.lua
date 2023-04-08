@@ -41,7 +41,7 @@ static const uint16_t cmdidxs1[%u] = {
 -- Values in cmdidxs2[c1][c2] are relative to cmdidxs1[c1] so that they
 -- fit in a byte.
 local cmdidxs2_out = string.format([[
-static const char_u cmdidxs2[%u][%u] = {
+static const uint8_t cmdidxs2[%u][%u] = {
   /*           a   b   c   d   e   f   g   h   i   j   k   l   m   n   o   p   q   r   s   t   u   v   w   x   y   z */
 ]], a_to_z, a_to_z)
 
@@ -49,6 +49,43 @@ enumfile:write([[
 typedef enum CMD_index {
 ]])
 defsfile:write(string.format([[
+#include "nvim/arglist.h"
+#include "nvim/autocmd.h"
+#include "nvim/buffer.h"
+#include "nvim/cmdhist.h"
+#include "nvim/debugger.h"
+#include "nvim/diff.h"
+#include "nvim/digraph.h"
+#include "nvim/eval.h"
+#include "nvim/eval/userfunc.h"
+#include "nvim/eval/vars.h"
+#include "nvim/ex_cmds.h"
+#include "nvim/ex_cmds2.h"
+#include "nvim/ex_docmd.h"
+#include "nvim/ex_eval.h"
+#include "nvim/ex_session.h"
+#include "nvim/help.h"
+#include "nvim/indent.h"
+#include "nvim/lua/executor.h"
+#include "nvim/mapping.h"
+#include "nvim/mark.h"
+#include "nvim/match.h"
+#include "nvim/menu.h"
+#include "nvim/message.h"
+#include "nvim/ops.h"
+#include "nvim/option.h"
+#include "nvim/os/lang.h"
+#include "nvim/profile.h"
+#include "nvim/quickfix.h"
+#include "nvim/runtime.h"
+#include "nvim/sign.h"
+#include "nvim/spell.h"
+#include "nvim/spellfile.h"
+#include "nvim/syntax.h"
+#include "nvim/undo.h"
+#include "nvim/usercmd.h"
+#include "nvim/version.h"
+
 static const int command_count = %u;
 static CommandDefinition cmdnames[%u] = {
 ]], #defs, #defs))

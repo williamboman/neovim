@@ -4,20 +4,29 @@
 // textformat.c: text formatting functions
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "nvim/ascii.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
 #include "nvim/drawscreen.h"
 #include "nvim/edit.h"
 #include "nvim/eval.h"
+#include "nvim/eval/typval_defs.h"
+#include "nvim/ex_cmds_defs.h"
 #include "nvim/getchar.h"
 #include "nvim/globals.h"
 #include "nvim/indent.h"
 #include "nvim/indent_c.h"
+#include "nvim/macros.h"
+#include "nvim/mark.h"
 #include "nvim/mbyte.h"
 #include "nvim/memline.h"
+#include "nvim/memory.h"
+#include "nvim/message.h"
 #include "nvim/move.h"
 #include "nvim/normal.h"
 #include "nvim/ops.h"
@@ -28,6 +37,7 @@
 #include "nvim/strings.h"
 #include "nvim/textformat.h"
 #include "nvim/textobject.h"
+#include "nvim/types.h"
 #include "nvim/undo.h"
 #include "nvim/vim.h"
 #include "nvim/window.h"
@@ -62,7 +72,7 @@ bool has_format_option(int x)
 void internal_format(int textwidth, int second_indent, int flags, bool format_only, int c)
 {
   int cc;
-  int save_char = NUL;
+  char save_char = NUL;
   bool haveto_redraw = false;
   const bool fo_ins_blank = has_format_option(FO_INS_BLANK);
   const bool fo_multibyte = has_format_option(FO_MBYTE_BREAK);
@@ -83,7 +93,7 @@ void internal_format(int textwidth, int second_indent, int flags, bool format_on
       && !(State & VREPLACE_FLAG)) {
     cc = gchar_cursor();
     if (ascii_iswhite(cc)) {
-      save_char = cc;
+      save_char = (char)cc;
       pchar_cursor('x');
     }
   }
@@ -117,13 +127,13 @@ void internal_format(int textwidth, int second_indent, int flags, bool format_on
 
     // Don't break until after the comment leader
     if (do_comments) {
-      char_u *line = (char_u *)get_cursor_line_ptr();
-      leader_len = get_leader_len((char *)line, NULL, false, true);
+      char *line = get_cursor_line_ptr();
+      leader_len = get_leader_len(line, NULL, false, true);
       if (leader_len == 0 && curbuf->b_p_cin) {
         // Check for a line comment after code.
-        int comment_start = check_linecomment((char *)line);
+        int comment_start = check_linecomment(line);
         if (comment_start != MAXCOL) {
-          leader_len = get_leader_len((char *)line + comment_start, NULL, false, true);
+          leader_len = get_leader_len(line + comment_start, NULL, false, true);
           if (leader_len != 0) {
             leader_len += comment_start;
           }
@@ -431,7 +441,7 @@ void internal_format(int textwidth, int second_indent, int flags, bool format_on
       // Check if cursor is not past the NUL off the line, cindent
       // may have added or removed indent.
       curwin->w_cursor.col += startcol;
-      len = (colnr_T)STRLEN(get_cursor_line_ptr());
+      len = (colnr_T)strlen(get_cursor_line_ptr());
       if (curwin->w_cursor.col > len) {
         curwin->w_cursor.col = len;
       }
@@ -448,7 +458,7 @@ void internal_format(int textwidth, int second_indent, int flags, bool format_on
   }
 
   if (save_char != NUL) {               // put back space after cursor
-    pchar_cursor((char_u)save_char);
+    pchar_cursor(save_char);
   }
 
   curwin->w_p_lbr = has_lbr;
@@ -465,14 +475,14 @@ void internal_format(int textwidth, int second_indent, int flags, bool format_on
 /// ('e' in comment flags), so that this line is skipped, and not joined to the
 /// previous line.  A new paragraph starts after a blank line, or when the
 /// comment leader changes.
-static int fmt_check_par(linenr_T lnum, int *leader_len, char_u **leader_flags, bool do_comments)
+static int fmt_check_par(linenr_T lnum, int *leader_len, char **leader_flags, bool do_comments)
 {
-  char_u *flags = NULL;        // init for GCC
-  char_u *ptr;
+  char *flags = NULL;        // init for GCC
+  char *ptr;
 
-  ptr = (char_u *)ml_get(lnum);
+  ptr = ml_get(lnum);
   if (do_comments) {
-    *leader_len = get_leader_len((char *)ptr, (char **)leader_flags, false, true);
+    *leader_len = get_leader_len(ptr, leader_flags, false, true);
   } else {
     *leader_len = 0;
   }
@@ -485,7 +495,7 @@ static int fmt_check_par(linenr_T lnum, int *leader_len, char_u **leader_flags, 
     }
   }
 
-  return *skipwhite((char *)ptr + *leader_len) == NUL
+  return *skipwhite(ptr + *leader_len) == NUL
          || (*leader_len > 0 && *flags == COM_END)
          || startPS(lnum, NUL, false);
 }
@@ -493,14 +503,14 @@ static int fmt_check_par(linenr_T lnum, int *leader_len, char_u **leader_flags, 
 /// @return  true if line "lnum" ends in a white character.
 static bool ends_in_white(linenr_T lnum)
 {
-  char_u *s = (char_u *)ml_get(lnum);
+  char *s = ml_get(lnum);
   size_t l;
 
   if (*s == NUL) {
     return false;
   }
-  l = STRLEN(s) - 1;
-  return ascii_iswhite(s[l]);
+  l = strlen(s) - 1;
+  return ascii_iswhite((uint8_t)s[l]);
 }
 
 /// @return  true if the two comment leaders given are the same.
@@ -534,7 +544,8 @@ static bool same_leader(linenr_T lnum, int leader1_len, char *leader1_flags, int
         return false;
       }
       if (*p == COM_START) {
-        if (*(ml_get(lnum) + leader1_len) == NUL) {
+        int line_len = (int)strlen(ml_get(lnum));
+        if (line_len <= leader1_len) {
           return false;
         }
         if (leader2_flags == NULL || leader2_len == 0) {
@@ -577,16 +588,16 @@ static bool same_leader(linenr_T lnum, int leader1_len, char *leader1_flags, int
 ///          false when the previous line is in the same paragraph.
 static bool paragraph_start(linenr_T lnum)
 {
-  char_u *p;
+  char *p;
   int leader_len = 0;                // leader len of current line
-  char_u *leader_flags = NULL;       // flags for leader of current line
+  char *leader_flags = NULL;         // flags for leader of current line
   int next_leader_len = 0;           // leader len of next line
-  char_u *next_leader_flags = NULL;  // flags for leader of next line
+  char *next_leader_flags = NULL;    // flags for leader of next line
 
   if (lnum <= 1) {
     return true;                // start of the file
   }
-  p = (char_u *)ml_get(lnum - 1);
+  p = ml_get(lnum - 1);
   if (*p == NUL) {
     return true;                // after empty line
   }
@@ -605,8 +616,8 @@ static bool paragraph_start(linenr_T lnum)
   if (has_format_option(FO_Q_NUMBER) && (get_number_indent(lnum) > 0)) {
     return true;                // numbered item starts in "lnum".
   }
-  if (!same_leader(lnum - 1, leader_len, (char *)leader_flags,
-                   next_leader_len, (char *)next_leader_flags)) {
+  if (!same_leader(lnum - 1, leader_len, leader_flags,
+                   next_leader_len, next_leader_flags)) {
     return true;                // change of comment leader.
   }
   return false;
@@ -622,19 +633,16 @@ static bool paragraph_start(linenr_T lnum)
 /// @param prev_line   may start in previous line
 void auto_format(bool trailblank, bool prev_line)
 {
-  pos_T pos;
   colnr_T len;
-  char *old;
-  char *new, *pnew;
-  int wasatend;
+  char *linep, *plinep;
   int cc;
 
   if (!has_format_option(FO_AUTO)) {
     return;
   }
 
-  pos = curwin->w_cursor;
-  old = get_cursor_line_ptr();
+  pos_T pos = curwin->w_cursor;
+  char *old = get_cursor_line_ptr();
 
   // may remove added space
   check_auto_format(false);
@@ -644,7 +652,7 @@ void auto_format(bool trailblank, bool prev_line)
   // in 'formatoptions' and there is a single character before the cursor.
   // Otherwise the line would be broken and when typing another non-white
   // next they are not joined back together.
-  wasatend = (pos.col == (colnr_T)STRLEN(old));
+  int wasatend = (pos.col == (colnr_T)strlen(old));
   if (*old != NUL && !trailblank && wasatend) {
     dec_cursor();
     cc = gchar_cursor();
@@ -697,13 +705,13 @@ void auto_format(bool trailblank, bool prev_line)
   // need to add a space when 'w' is in 'formatoptions' to keep a paragraph
   // formatted.
   if (!wasatend && has_format_option(FO_WHITE_PAR)) {
-    new = get_cursor_line_ptr();
-    len = (colnr_T)STRLEN(new);
+    linep = get_cursor_line_ptr();
+    len = (colnr_T)strlen(linep);
     if (curwin->w_cursor.col == len) {
-      pnew = xstrnsave(new, (size_t)len + 2);
-      pnew[len] = ' ';
-      pnew[len + 1] = NUL;
-      ml_replace(curwin->w_cursor.lnum, pnew, false);
+      plinep = xstrnsave(linep, (size_t)len + 2);
+      plinep[len] = ' ';
+      plinep[len + 1] = NUL;
+      ml_replace(curwin->w_cursor.lnum, plinep, false);
       // remove the space later
       did_add_space = true;
     } else {
@@ -722,25 +730,25 @@ void auto_format(bool trailblank, bool prev_line)
 /// @param end_insert  true when ending Insert mode
 void check_auto_format(bool end_insert)
 {
-  int c = ' ';
-  int cc;
+  if (!did_add_space) {
+    return;
+  }
 
-  if (did_add_space) {
-    cc = gchar_cursor();
-    if (!WHITECHAR(cc)) {
-      // Somehow the space was removed already.
+  int cc = gchar_cursor();
+  if (!WHITECHAR(cc)) {
+    // Somehow the space was removed already.
+    did_add_space = false;
+  } else {
+    int c = ' ';
+    if (!end_insert) {
+      inc_cursor();
+      c = gchar_cursor();
+      dec_cursor();
+    }
+    if (c != NUL) {
+      // The space is no longer at the end of the line, delete it.
+      del_char(false);
       did_add_space = false;
-    } else {
-      if (!end_insert) {
-        inc_cursor();
-        c = gchar_cursor();
-        dec_cursor();
-      }
-      if (c != NUL) {
-        // The space is no longer at the end of the line, delete it.
-        del_char(false);
-        did_add_space = false;
-      }
     }
   }
 }
@@ -873,7 +881,6 @@ void op_formatexpr(oparg_T *oap)
 int fex_format(linenr_T lnum, long count, int c)
 {
   int use_sandbox = was_set_insecurely(curwin, "formatexpr", OPT_LOCAL);
-  int r;
 
   // Set v:lnum to the first line number and v:count to the number of lines.
   // Set v:char to the character to be inserted (can be NUL).
@@ -887,7 +894,7 @@ int fex_format(linenr_T lnum, long count, int c)
   if (use_sandbox) {
     sandbox++;
   }
-  r = (int)eval_to_number(fex);
+  int r = (int)eval_to_number(fex);
   if (use_sandbox) {
     sandbox--;
   }
@@ -914,8 +921,8 @@ void format_lines(linenr_T line_count, bool avoid_fex)
   bool next_is_start_par = false;
   int leader_len = 0;               // leader len of current line
   int next_leader_len;              // leader len of next line
-  char_u *leader_flags = NULL;      // flags for leader of current line
-  char_u *next_leader_flags = NULL;  // flags for leader of next line
+  char *leader_flags = NULL;        // flags for leader of current line
+  char *next_leader_flags = NULL;   // flags for leader of next line
   bool advance = true;
   int second_indent = -1;           // indent for second line (comment aware)
   bool first_par_line = true;
@@ -1018,14 +1025,14 @@ void format_lines(linenr_T line_count, bool avoid_fex)
       // When the comment leader changes, it's the end of the paragraph.
       if (curwin->w_cursor.lnum >= curbuf->b_ml.ml_line_count
           || !same_leader(curwin->w_cursor.lnum,
-                          leader_len, (char *)leader_flags,
+                          leader_len, leader_flags,
                           next_leader_len,
-                          (char *)next_leader_flags)) {
+                          next_leader_flags)) {
         // Special case: If the next line starts with a line comment
         // and this line has a line comment after some text, the
         // paragraph doesn't really end.
         if (next_leader_flags == NULL
-            || STRNCMP(next_leader_flags, "://", 3) != 0
+            || strncmp(next_leader_flags, "://", 3) != 0
             || check_linecomment(get_cursor_line_ptr()) == MAXCOL) {
           is_end_par = true;
         }
@@ -1115,7 +1122,7 @@ void format_lines(linenr_T line_count, bool avoid_fex)
         }
         first_par_line = false;
         // If the line is getting long, format it next time
-        if (STRLEN(get_cursor_line_ptr()) > (size_t)max_len) {
+        if (strlen(get_cursor_line_ptr()) > (size_t)max_len) {
           force_format = true;
         } else {
           force_format = false;

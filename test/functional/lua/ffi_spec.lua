@@ -25,38 +25,51 @@ describe('ffi.cdef', function()
       local ffi = require('ffi')
 
       ffi.cdef[[
-        typedef unsigned char char_u;
         typedef struct window_S win_T;
         typedef struct {} stl_hlrec_t;
         typedef struct {} StlClickRecord;
+        typedef struct {} statuscol_T;
         typedef struct {} Error;
 
         win_T *find_window_by_handle(int Window, Error *err);
 
         int build_stl_str_hl(
           win_T *wp,
-          char_u *out,
+          char *out,
           size_t outlen,
-          char_u *fmt,
-          int use_sandbox,
-          char_u fillchar,
+          char *fmt,
+          char *opt_name,
+          int opt_scope,
+          int fillchar,
           int maxwidth,
           stl_hlrec_t **hltab,
-          StlClickRecord **tabtab
+          StlClickRecord **tabtab,
+          statuscol_T *scp
         );
       ]]
 
       return ffi.C.build_stl_str_hl(
         ffi.C.find_window_by_handle(0, ffi.new('Error')),
-        ffi.new('char_u[1024]'),
+        ffi.new('char[1024]'),
         1024,
-        ffi.cast('char_u*', 'StatusLineOfLength20'),
+        ffi.cast('char*', 'StatusLineOfLength20'),
+        nil,
         0,
         0,
         0,
         nil,
+        nil,
         nil
       )
     ]=])
+
+    -- Check that extern symbols are exported and accessible
+    eq(true, exec_lua[[
+      local ffi = require('ffi')
+
+      ffi.cdef('uint64_t display_tick;')
+
+      return ffi.C.display_tick >= 0
+    ]])
   end)
 end)

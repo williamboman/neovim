@@ -1,14 +1,23 @@
 // This is an open source non-commercial project. Dear PVS-Studio, please check
 // it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "klib/kvec.h"
+#include "lauxlib.h"
 #include "nvim/api/extmark.h"
+#include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
-#include "nvim/buffer.h"
-#include "nvim/decoration.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/decoration_provider.h"
+#include "nvim/globals.h"
 #include "nvim/highlight.h"
-#include "nvim/lib/kvec.h"
+#include "nvim/log.h"
 #include "nvim/lua/executor.h"
+#include "nvim/memory.h"
+#include "nvim/pos.h"
 
 static kvec_t(DecorProvider) decor_providers = KV_INITIAL_VALUE;
 
@@ -191,6 +200,25 @@ void decor_providers_invoke_end(DecorProviders *providers, char **err)
       ADD_C(args, INTEGER_OBJ((int)display_tick));
       decor_provider_invoke(p->ns_id, "end", p->redraw_end, args, true, err);
     }
+  }
+}
+
+/// Mark all cached state of per-namespace highlights as invalid. Revalidate
+/// current namespace.
+///
+/// Expensive! Should on be called by an already throttled validity check
+/// like highlight_changed() (throttled to the next redraw or mode change)
+void decor_provider_invalidate_hl(void)
+{
+  size_t len = kv_size(decor_providers);
+  for (size_t i = 0; i < len; i++) {
+    DecorProvider *item = &kv_A(decor_providers, i);
+    item->hl_cached = false;
+  }
+
+  if (ns_hl_active) {
+    ns_hl_active = -1;
+    hl_check_ns();
   }
 }
 

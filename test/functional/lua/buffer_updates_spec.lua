@@ -1,6 +1,6 @@
 -- Test suite for testing interactions with API bindings
 local helpers = require('test.functional.helpers')(after_each)
-local lfs = require('lfs')
+local luv = require('luv')
 
 local command = helpers.command
 local meths = helpers.meths
@@ -111,6 +111,24 @@ describe('lua buffer event callbacks: on_lines', function()
 
     -- plugins can opt in to receive changedtick events, or choose
     -- to only receive actual changes.
+    check_events {
+      { "test1", "lines", 1, tick, 3, 4, 5, 13 };
+      { "test2", "lines", 1, tick, 3, 4, 5, 13 };
+      { "test2", "changedtick", 1, tick+1 };
+    }
+    tick = tick + 1
+
+    tick = tick + 1
+    command('redo')
+    check_events {
+      { "test1", "lines", 1, tick, 3, 5, 4, 32 };
+      { "test2", "lines", 1, tick, 3, 5, 4, 32 };
+      { "test2", "changedtick", 1, tick+1 };
+    }
+    tick = tick + 1
+
+    tick = tick + 1
+    command('undo!')
     check_events {
       { "test1", "lines", 1, tick, 3, 4, 5, 13 };
       { "test2", "lines", 1, tick, 3, 4, 5, 13 };
@@ -299,7 +317,18 @@ describe('lua buffer event callbacks: on_lines', function()
     feed('1G0')
     feed('P')
     eq(meths.get_var('linesev'), { "lines", 1, 6, 0, 3, 3, 9 })
+  end)
 
+  it('calling nvim_buf_call() from callback does not cause Normal mode CTRL-A to misbehave #16729', function()
+    exec_lua([[
+      vim.api.nvim_buf_attach(0, false, {
+        on_lines = function(...)
+          vim.api.nvim_buf_call(0, function() end)
+        end,
+      })
+    ]])
+    feed('itest123<Esc><C-A>')
+    eq('test124', meths.get_current_line())
   end)
 end)
 
@@ -315,7 +344,7 @@ describe('lua: nvim_buf_attach on_bytes', function()
       start_txt = meths.buf_get_lines(0, 0, -1, true)
     end
     local shadowbytes = table.concat(start_txt, '\n') .. '\n'
-    -- TODO: while we are brewing the real strong coffe,
+    -- TODO: while we are brewing the real strong coffee,
     -- verify should check buf_get_offset after every check_events
     if verify then
       local len = meths.buf_get_offset(0, meths.buf_line_count(0))
@@ -725,7 +754,8 @@ describe('lua: nvim_buf_attach on_bytes', function()
       write_file("Xtest-reload", dedent [[
         old line 1
         old line 2]])
-      lfs.touch("Xtest-reload", os.time() - 10)
+      local atime = os.time() - 10
+      luv.fs_utime("Xtest-reload", atime, atime)
       command "e Xtest-reload"
       command "set autoread"
 
@@ -1139,6 +1169,25 @@ describe('lua: nvim_buf_attach on_bytes', function()
       feed("gg0z=4<cr><cr>") -- accepts 'Hello'
       check_events {
         { "test1", "bytes", 1, 3, 0, 0, 0, 0, 2, 2, 0, 2, 2 };
+      }
+    end)
+
+    it('works with :diffput and :diffget', function()
+      local check_events = setup_eventcheck(verify, {"AAA"})
+      command('diffthis')
+      command('new')
+      command('diffthis')
+      meths.buf_set_lines(0, 0, -1, true, {"AAA", "BBB"})
+      feed('G')
+      command('diffput')
+      check_events {
+        { "test1", "bytes", 1, 3, 1, 0, 4, 0, 0, 0, 1, 0, 4 };
+      }
+      meths.buf_set_lines(0, 0, -1, true, {"AAA", "CCC"})
+      feed('<C-w>pG')
+      command('diffget')
+      check_events {
+        { "test1", "bytes", 1, 4, 1, 0, 4, 1, 0, 4, 1, 0, 4 };
       }
     end)
 

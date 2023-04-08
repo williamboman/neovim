@@ -1,5 +1,4 @@
--- Skip if legacy filetype is enabled or filetype detection is disabled
-if vim.g.do_legacy_filetype or vim.g.did_load_filetypes then
+if vim.g.did_load_filetypes then
   return
 end
 vim.g.did_load_filetypes = 1
@@ -14,10 +13,14 @@ vim.api.nvim_create_autocmd({ 'BufRead', 'BufNewFile', 'StdinReadPost' }, {
       -- Generic configuration file used as fallback
       ft = require('vim.filetype.detect').conf(args.file, args.buf)
       if ft then
-        vim.api.nvim_cmd({ cmd = 'setf', args = { 'FALLBACK', ft } }, {})
+        vim.api.nvim_buf_call(args.buf, function()
+          vim.api.nvim_cmd({ cmd = 'setf', args = { 'FALLBACK', ft } }, {})
+        end)
       end
     else
-      vim.api.nvim_buf_set_option(args.buf, 'filetype', ft)
+      vim.api.nvim_buf_call(args.buf, function()
+        vim.api.nvim_cmd({ cmd = 'setf', args = { ft } }, {})
+      end)
       if on_detect then
         on_detect(args.buf)
       end

@@ -2,26 +2,31 @@
 // it. PVS-Studio Static Code Analyzer for C, C++ and C#: http://www.viva64.com
 
 #include <assert.h>
-#include <limits.h>
-#include <stdlib.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
+#include "klib/kvec.h"
 #include "nvim/api/private/converter.h"
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/api/vimscript.h"
 #include "nvim/ascii.h"
-#include "nvim/autocmd.h"
+#include "nvim/buffer_defs.h"
 #include "nvim/eval.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
 #include "nvim/eval/userfunc.h"
 #include "nvim/ex_docmd.h"
-#include "nvim/ops.h"
+#include "nvim/garray.h"
+#include "nvim/globals.h"
+#include "nvim/memory.h"
+#include "nvim/pos.h"
 #include "nvim/runtime.h"
-#include "nvim/strings.h"
 #include "nvim/vim.h"
 #include "nvim/viml/parser/expressions.h"
 #include "nvim/viml/parser/parser.h"
-#include "nvim/window.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "api/vimscript.c.generated.h"
@@ -40,13 +45,33 @@
 /// @see |nvim_cmd()|
 ///
 /// @param src      Vimscript code
-/// @param output   Capture and return all (non-error, non-shell |:!|) output
+/// @param opts  Optional parameters.
+///           - output: (boolean, default false) Whether to capture and return
+///                     all (non-error, non-shell |:!|) output.
 /// @param[out] err Error details (Vim error), if any
-/// @return Output (non-error, non-shell |:!|) if `output` is true,
-///         else empty string.
-String nvim_exec(uint64_t channel_id, String src, Boolean output, Error *err)
-  FUNC_API_SINCE(7)
+/// @return Dictionary containing information about execution, with these keys:
+///       - output: (string|nil) Output if `opts.output` is true.
+Dictionary nvim_exec2(uint64_t channel_id, String src, Dict(exec_opts) *opts, Error *err)
+  FUNC_API_SINCE(11)
 {
+  Dictionary result = ARRAY_DICT_INIT;
+
+  String output = exec_impl(channel_id, src, opts, err);
+  if (ERROR_SET(err)) {
+    return result;
+  }
+
+  if (HAS_KEY(opts->output) && api_object_to_bool(opts->output, "opts.output", false, err)) {
+    PUT(result, "output", STRING_OBJ(output));
+  }
+
+  return result;
+}
+
+String exec_impl(uint64_t channel_id, String src, Dict(exec_opts) *opts, Error *err)
+{
+  Boolean output = api_object_to_bool(opts->output, "opts.output", false, err);
+
   const int save_msg_silent = msg_silent;
   garray_T *const save_capture_ga = capture_ga;
   const int save_msg_col = msg_col;
@@ -64,7 +89,7 @@ String nvim_exec(uint64_t channel_id, String src, Boolean output, Error *err)
 
   const sctx_T save_current_sctx = api_set_sctx(channel_id);
 
-  do_source_str(src.data, "nvim_exec()");
+  do_source_str(src.data, "nvim_exec2()");
   if (output) {
     capture_ga = save_capture_ga;
     msg_silent = save_msg_silent;
@@ -103,8 +128,8 @@ theend:
 ///
 /// On execution error: fails with VimL error, updates v:errmsg.
 ///
-/// Prefer using |nvim_cmd()| or |nvim_exec()| over this. To evaluate multiple lines of Vim script
-/// or an Ex command directly, use |nvim_exec()|. To construct an Ex command using a structured
+/// Prefer using |nvim_cmd()| or |nvim_exec2()| over this. To evaluate multiple lines of Vim script
+/// or an Ex command directly, use |nvim_exec2()|. To construct an Ex command using a structured
 /// format and then execute it, use |nvim_cmd()|. To modify an Ex command before evaluating it, use
 /// |nvim_parse_cmd()| in conjunction with |nvim_cmd()|.
 ///
@@ -132,34 +157,36 @@ Object nvim_eval(String expr, Error *err)
   static int recursive = 0;  // recursion depth
   Object rv = OBJECT_INIT;
 
-  TRY_WRAP({
-    // Initialize `force_abort`  and `suppress_errthrow` at the top level.
-    if (!recursive) {
-      force_abort = false;
-      suppress_errthrow = false;
-      did_throw = false;
-      // `did_emsg` is set by emsg(), which cancels execution.
-      did_emsg = false;
-    }
-    recursive++;
-    try_start();
+  // Initialize `force_abort`  and `suppress_errthrow` at the top level.
+  if (!recursive) {
+    force_abort = false;
+    suppress_errthrow = false;
+    did_throw = false;
+    // `did_emsg` is set by emsg(), which cancels execution.
+    did_emsg = false;
+  }
 
-    typval_T rettv;
-    int ok = eval0(expr.data, &rettv, NULL, true);
+  recursive++;
 
-    if (!try_end(err)) {
-      if (ok == FAIL) {
-        // Should never happen, try_end() should get the error. #8371
-        api_set_error(err, kErrorTypeException,
-                      "Failed to evaluate expression: '%.*s'", 256, expr.data);
-      } else {
-        rv = vim_to_object(&rettv);
-      }
-    }
+  typval_T rettv;
+  int ok;
 
-    tv_clear(&rettv);
-    recursive--;
+  TRY_WRAP(err, {
+    ok = eval0(expr.data, &rettv, NULL, true);
   });
+
+  if (!ERROR_SET(err)) {
+    if (ok == FAIL) {
+      // Should never happen, try_end() (in TRY_WRAP) should get the error. #8371
+      api_set_error(err, kErrorTypeException,
+                    "Failed to evaluate expression: '%.*s'", 256, expr.data);
+    } else {
+      rv = vim_to_object(&rettv);
+    }
+  }
+
+  tv_clear(&rettv);
+  recursive--;
 
   return rv;
 }
@@ -191,33 +218,36 @@ static Object _call_function(String fn, Array args, dict_T *self, Error *err)
     }
   }
 
-  TRY_WRAP({
-    // Initialize `force_abort`  and `suppress_errthrow` at the top level.
-    if (!recursive) {
-      force_abort = false;
-      suppress_errthrow = false;
-      did_throw = false;
-      // `did_emsg` is set by emsg(), which cancels execution.
-      did_emsg = false;
-    }
-    recursive++;
-    try_start();
-    typval_T rettv;
-    funcexe_T funcexe = FUNCEXE_INIT;
-    funcexe.firstline = curwin->w_cursor.lnum;
-    funcexe.lastline = curwin->w_cursor.lnum;
-    funcexe.evaluate = true;
-    funcexe.selfdict = self;
+  // Initialize `force_abort`  and `suppress_errthrow` at the top level.
+  if (!recursive) {
+    force_abort = false;
+    suppress_errthrow = false;
+    did_throw = false;
+    // `did_emsg` is set by emsg(), which cancels execution.
+    did_emsg = false;
+  }
+  recursive++;
+
+  typval_T rettv;
+  funcexe_T funcexe = FUNCEXE_INIT;
+  funcexe.fe_firstline = curwin->w_cursor.lnum;
+  funcexe.fe_lastline = curwin->w_cursor.lnum;
+  funcexe.fe_evaluate = true;
+  funcexe.fe_selfdict = self;
+
+  TRY_WRAP(err, {
     // call_func() retval is deceptive, ignore it.  Instead we set `msg_list`
     // (see above) to capture abort-causing non-exception errors.
     (void)call_func(fn.data, (int)fn.size, &rettv, (int)args.size,
                     vim_args, &funcexe);
-    if (!try_end(err)) {
-      rv = vim_to_object(&rettv);
-    }
-    tv_clear(&rettv);
-    recursive--;
   });
+
+  if (!ERROR_SET(err)) {
+    rv = vim_to_object(&rettv);
+  }
+
+  tv_clear(&rettv);
+  recursive--;
 
 free_vim_args:
   while (i > 0) {
@@ -304,7 +334,7 @@ Object nvim_call_dict_function(Object dict, String fn, Array args, Error *err)
     }
     fn = (String) {
       .data = di->di_tv.vval.v_string,
-      .size = STRLEN(di->di_tv.vval.v_string),
+      .size = strlen(di->di_tv.vval.v_string),
     };
   }
 
@@ -532,7 +562,7 @@ Dictionary nvim_parse_expression(String expr, String flags, Boolean highlight, E
       kv_drop(ast_conv_stack, 1);
     } else {
       if (cur_item.ret_node_p->type == kObjectTypeNil) {
-        size_t items_size = (size_t)(3  // "type", "start" and "len"
+        size_t items_size = (size_t)(3  // "type", "start" and "len"  // NOLINT(bugprone-misplaced-widening-cast)
                                      + (node->children != NULL)  // "children"
                                      + (node->type == kExprNodeOption
                                         || node->type == kExprNodePlainIdentifier)  // "scope"

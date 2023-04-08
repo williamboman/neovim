@@ -2,7 +2,7 @@ local helpers = require('test.functional.helpers')(after_each)
 local clear, feed, eq = helpers.clear, helpers.feed, helpers.eq
 local expect, command, eval = helpers.expect,  helpers.command,  helpers.eval
 local insert, call = helpers.insert, helpers.call
-local funcs, dedent = helpers.funcs, helpers.dedent
+local exec_capture, dedent = helpers.exec_capture, helpers.dedent
 
 -- First test it's implemented using the :lmap and :lnoremap commands, then
 -- check those mappings behave as expected.
@@ -30,7 +30,7 @@ describe("'keymap' / :lmap", function()
       command('lmapclear <buffer>')
       command('set keymap=dvorak')
       command('set nomore')
-      local bindings = funcs.nvim_exec('lmap', true)
+      local bindings = exec_capture('lmap')
       eq(dedent([[
 
       l  "            @_
@@ -184,7 +184,7 @@ describe("'keymap' / :lmap", function()
     feed('il<esc>')
     expect('alllaaa')
   end)
-  -- This is a problem introduced when introducting :lmap and macro
+  -- This is a problem introduced when introducing :lmap and macro
   -- compatibility. There are no plans to fix this as the complexity involved
   -- seems too great.
   pending('mappings not applied to macro replay of :lnoremap', function()

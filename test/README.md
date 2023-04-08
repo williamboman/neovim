@@ -3,7 +3,7 @@ Tests
 
 Tests are broadly divided into *unit tests* ([test/unit](https://github.com/neovim/neovim/tree/master/test/unit/)),
 *functional tests* ([test/functional](https://github.com/neovim/neovim/tree/master/test/functional/)),
-and *old tests* ([src/nvim/testdir/](https://github.com/neovim/neovim/tree/master/src/nvim/testdir/)).
+and *old tests* ([test/old/testdir/](https://github.com/neovim/neovim/tree/master/test/old/testdir/)).
 
 - _Unit_ testing is achieved by compiling the tests as a shared library which is
   loaded and called by [LuaJit FFI](http://luajit.org/ext_ffi.html).
@@ -48,7 +48,7 @@ Layout
 - `/test/*/**/*_spec.lua` : actual tests. Files that do not end with
   `_spec.lua` are libraries like `/test/**/helpers.lua`, except that they have
   some common topic.
-- `/src/nvim/testdir` : old tests (from Vim)
+- `/test/old/testdir` : old tests (from Vim)
 
 
 Running tests
@@ -83,7 +83,7 @@ To run a *single* legacy test file you can use either:
 
 or:
 
-    make src/nvim/testdir/test_syntax.vim
+    make test/old/testdir/test_syntax.vim
 
 - Specify only the test file name, not the full path.
 
@@ -149,13 +149,25 @@ To run a *specific* unit test:
 
     TEST_FILE=test/unit/foo.lua make unittest
 
+or
+
+    cmake -E env "TEST_FILE=test/unit/foo.lua" cmake --build build --target unittest
+
 To run a *specific* functional test:
 
     TEST_FILE=test/functional/foo.lua make functionaltest
 
+or
+
+    cmake -E env "TEST_FILE=test/functional/foo.lua" cmake --build build --target functionaltest
+
 To *repeat* a test:
 
     BUSTED_ARGS="--repeat=100 --no-keep-going" TEST_FILE=test/functional/foo_spec.lua make functionaltest
+
+or
+
+    cmake -E env "TEST_FILE=test/functional/foo_spec.lua" cmake -E env BUSTED_ARGS="--repeat=100 --no-keep-going" cmake --build build --target functionaltest
 
 ### Filter by tag
 

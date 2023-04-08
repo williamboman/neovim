@@ -48,10 +48,15 @@
 // at the repo root.
 
 #include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
+#include "klib/kvec.h"
 #include "nvim/garray.h"
-#include "nvim/lib/kvec.h"
 #include "nvim/marktree.h"
+#include "nvim/memory.h"
+#include "nvim/pos.h"
 
 #define T MT_BRANCH_FACTOR
 #define ILEN (sizeof(mtnode_t) + (2 * T) * sizeof(void *))
@@ -274,13 +279,13 @@ void marktree_put_key(MarkTree *b, mtkey_t k)
 /// 6. If 4 went all the way to the root node. The root node
 ///    might have ended up with size 0. Delete it then.
 ///
-/// NB: ideally keeps the iterator valid. Like point to the key after this
-/// if present.
+/// The iterator remains valid, and now points at the key _after_ the deleted
+/// one.
 ///
 /// @param rev should be true if we plan to iterate _backwards_ and delete
 ///            stuff before this key. Most of the time this is false (the
 ///            recommended strategy is to always iterate forward)
-void marktree_del_itr(MarkTree *b, MarkTreeIter *itr, bool rev)
+uint64_t marktree_del_itr(MarkTree *b, MarkTreeIter *itr, bool rev)
 {
   int adjustment = 0;
 
@@ -288,6 +293,12 @@ void marktree_del_itr(MarkTree *b, MarkTreeIter *itr, bool rev)
   int curi = itr->i;
   uint64_t id = mt_lookup_key(cur->key[curi]);
   // fprintf(stderr, "\nDELET %lu\n", id);
+
+  mtkey_t raw = rawkey(itr);
+  uint64_t other = 0;
+  if (mt_paired(raw)) {
+    other = mt_lookup_id(raw.ns, raw.id, !mt_end(raw));
+  }
 
   if (itr->node->level) {
     if (rev) {
@@ -437,6 +448,8 @@ void marktree_del_itr(MarkTree *b, MarkTreeIter *itr, bool rev)
       marktree_itr_next(b, itr);
     }
   }
+
+  return other;
 }
 
 static mtnode_t *merge_node(MarkTree *b, mtnode_t *p, int i)
@@ -1130,7 +1143,7 @@ void marktree_check(MarkTree *b)
 
   mtpos_t dummy;
   bool last_right = false;
-  size_t nkeys = check_node(b, b->root, &dummy, &last_right);
+  size_t nkeys = marktree_check_node(b, b->root, &dummy, &last_right);
   assert(b->n_keys == nkeys);
   assert(b->n_keys == map_size(b->id2node));
 #else
@@ -1140,7 +1153,7 @@ void marktree_check(MarkTree *b)
 }
 
 #ifndef NDEBUG
-static size_t check_node(MarkTree *b, mtnode_t *x, mtpos_t *last, bool *last_right)
+size_t marktree_check_node(MarkTree *b, mtnode_t *x, mtpos_t *last, bool *last_right)
 {
   assert(x->n <= 2 * T - 1);
   // TODO(bfredl): too strict if checking "in repair" post-delete tree.
@@ -1149,7 +1162,7 @@ static size_t check_node(MarkTree *b, mtnode_t *x, mtpos_t *last, bool *last_rig
 
   for (int i = 0; i < x->n; i++) {
     if (x->level) {
-      n_keys += check_node(b, x->ptr[i], last, last_right);
+      n_keys += marktree_check_node(b, x->ptr[i], last, last_right);
     } else {
       *last = (mtpos_t) { 0, 0 };
     }
@@ -1166,7 +1179,7 @@ static size_t check_node(MarkTree *b, mtnode_t *x, mtpos_t *last, bool *last_rig
   }
 
   if (x->level) {
-    n_keys += check_node(b, x->ptr[x->n], last, last_right);
+    n_keys += marktree_check_node(b, x->ptr[x->n], last, last_right);
     unrelative(x->key[x->n - 1].pos, last);
 
     for (int i = 0; i < x->n + 1; i++) {
@@ -1177,7 +1190,7 @@ static size_t check_node(MarkTree *b, mtnode_t *x, mtpos_t *last, bool *last_rig
         assert(x->ptr[i] != x->ptr[j]);
       }
     }
-  } else {
+  } else if (x->n > 0) {
     *last = x->key[x->n - 1].pos;
   }
   return n_keys;
@@ -1203,7 +1216,7 @@ void mt_inspect_node(MarkTree *b, garray_T *ga, mtnode_t *n, mtpos_t off)
   for (int i = 0; i < n->n; i++) {
     mtpos_t p = n->key[i].pos;
     unrelative(off, &p);
-    snprintf((char *)buf, sizeof(buf), "%d/%d", p.row, p.col);
+    snprintf(buf, sizeof(buf), "%d/%d", p.row, p.col);
     ga_concat(ga, buf);
     if (n->level) {
       mt_inspect_node(b, ga, n->ptr[i + 1], p);

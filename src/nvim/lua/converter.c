@@ -4,27 +4,31 @@
 #include <assert.h>
 #include <lauxlib.h>
 #include <lua.h>
-#include <lualib.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "nvim/api/private/defs.h"
 #include "nvim/api/private/helpers.h"
-#include "nvim/assert.h"
-#include "nvim/func_attr.h"
 #include "nvim/memory.h"
 // FIXME: vim.h is not actually needed, but otherwise it states MAXPATHL is
 //        redefined
+#include "klib/kvec.h"
 #include "nvim/ascii.h"
 #include "nvim/eval/decode.h"
 #include "nvim/eval/typval.h"
+#include "nvim/eval/typval_defs.h"
+#include "nvim/eval/typval_encode.h"
 #include "nvim/eval/userfunc.h"
-#include "nvim/globals.h"
-#include "nvim/lib/kvec.h"
+#include "nvim/garray.h"
+#include "nvim/gettext.h"
 #include "nvim/lua/converter.h"
 #include "nvim/lua/executor.h"
 #include "nvim/macros.h"
 #include "nvim/message.h"
+#include "nvim/types.h"
 #include "nvim/vim.h"
 
 /// Determine, which keys lua table contains
@@ -387,7 +391,7 @@ nlua_pop_typval_table_processing_end:
     case LUA_TFUNCTION: {
       LuaRef func = nlua_ref_global(lstate, -1);
 
-      char *name = (char *)register_luafunc(func);
+      char *name = register_luafunc(func);
 
       cur.tv->v_type = VAR_FUNC;
       cur.tv->vval.v_string = xstrdup(name);
@@ -455,7 +459,7 @@ static bool typval_conv_special = false;
   TYPVAL_ENCODE_CONV_NUMBER(tv, flt)
 
 #define TYPVAL_ENCODE_CONV_STRING(tv, str, len) \
-  lua_pushlstring(lstate, (const char *)(str), (len))
+  lua_pushlstring(lstate, (str), (len))
 
 #define TYPVAL_ENCODE_CONV_STR_STRING TYPVAL_ENCODE_CONV_STRING
 
@@ -465,9 +469,7 @@ static bool typval_conv_special = false;
 #define TYPVAL_ENCODE_CONV_BLOB(tv, blob, len) \
   do { \
     const blob_T *const blob_ = (blob); \
-    lua_pushlstring(lstate, \
-                    blob_ != NULL ? (const char *)blob_->bv_ga.ga_data : "", \
-                    (size_t)(len)); \
+    lua_pushlstring(lstate, blob_ != NULL ? blob_->bv_ga.ga_data : "", (size_t)(len)); \
   } while (0)
 
 #define TYPVAL_ENCODE_CONV_FUNC_START(tv, fun) \
@@ -565,6 +567,7 @@ static bool typval_conv_special = false;
 #define TYPVAL_ENCODE_FIRST_ARG_TYPE lua_State *const
 #define TYPVAL_ENCODE_FIRST_ARG_NAME lstate
 #include "nvim/eval/typval_encode.c.h"
+
 #undef TYPVAL_ENCODE_SCOPE
 #undef TYPVAL_ENCODE_NAME
 #undef TYPVAL_ENCODE_FIRST_ARG_TYPE
@@ -906,9 +909,8 @@ Float nlua_pop_Float(lua_State *lstate, Error *err)
   lua_pop(lstate, 1);
   if (table_props.type != kObjectTypeFloat) {
     return 0;
-  } else {
-    return (Float)table_props.val;
   }
+  return (Float)table_props.val;
 }
 
 /// Convert lua table to array without determining whether it is array

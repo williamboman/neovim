@@ -1,14 +1,29 @@
 local F = {}
 
---- Returns {a} if it is not nil, otherwise returns {b}.
+--- Returns the first argument which is not nil.
 ---
----@param a
----@param b
-function F.if_nil(a, b)
-  if a == nil then
-    return b
+--- If all arguments are nil, returns nil.
+---
+--- Examples:
+--- <pre>
+--- local a = nil
+--- local b = nil
+--- local c = 42
+--- local d = true
+--- assert(vim.F.if_nil(a, b, c, d) == 42)
+--- </pre>
+---
+---@param ... any
+---@return any
+function F.if_nil(...)
+  local nargs = select('#', ...)
+  for i = 1, nargs do
+    local v = select(i, ...)
+    if v ~= nil then
+      return v
+    end
   end
-  return a
+  return nil
 end
 
 -- Use in combination with pcall

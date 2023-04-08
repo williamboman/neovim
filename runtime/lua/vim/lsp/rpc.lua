@@ -1,4 +1,3 @@
-local vim = vim
 local uv = vim.loop
 local log = require('vim.lsp.log')
 local protocol = require('vim.lsp.protocol')
@@ -187,7 +186,7 @@ end
 
 --- Creates an RPC response object/table.
 ---
----@param code number RPC error code defined in `vim.lsp.protocol.ErrorCodes`
+---@param code integer RPC error code defined in `vim.lsp.protocol.ErrorCodes`
 ---@param message string|nil arbitrary message to send to server
 ---@param data any|nil arbitrary data to send to server
 local function rpc_response_error(code, message, data)
@@ -225,8 +224,8 @@ end
 ---@private
 --- Default dispatcher for when a client exits.
 ---
----@param code (number): Exit code
----@param signal (number): Number describing the signal used to terminate (if
+---@param code (integer): Exit code
+---@param signal (integer): Number describing the signal used to terminate (if
 ---any)
 function default_dispatchers.on_exit(code, signal)
   local _ = log.info() and log.info('client_exit', { code = code, signal = signal })
@@ -234,7 +233,7 @@ end
 ---@private
 --- Default dispatcher for client errors.
 ---
----@param code (number): Error code
+---@param code (integer): Error code
 ---@param err (any): Details about the error
 ---any)
 function default_dispatchers.on_error(code, err)
@@ -271,7 +270,7 @@ local function create_read_loop(handle_body, on_no_chunk, on_error)
 end
 
 ---@class RpcClient
----@field message_index number
+---@field message_index integer
 ---@field message_callbacks table
 ---@field notify_reply_callbacks table
 ---@field transport table
@@ -294,7 +293,7 @@ end
 ---@private
 --- Sends a notification to the LSP server.
 ---@param method (string) The invoked LSP method
----@param params (table|nil): Parameters for the invoked LSP method
+---@param params (any): Parameters for the invoked LSP method
 ---@returns (bool) `true` if notification could be sent, `false` if not
 function Client:notify(method, params)
   return self:encode_and_send({
@@ -320,9 +319,9 @@ end
 ---
 ---@param method (string) The invoked LSP method
 ---@param params (table|nil) Parameters for the invoked LSP method
----@param callback (function) Callback to invoke
+---@param callback fun(err: lsp.ResponseError|nil, result: any) Callback to invoke
 ---@param notify_reply_callback (function|nil) Callback to invoke as soon as a request is no longer pending
----@returns (bool, number) `(true, message_id)` if request could be sent, `false` if not
+---@return boolean success, integer|nil request_id true, request_id if request could be sent, `false` if not
 function Client:request(method, params, callback, notify_reply_callback)
   validate({
     callback = { callback, 'f' },
@@ -392,45 +391,46 @@ function Client:handle_body(body)
     -- Schedule here so that the users functions don't trigger an error and
     -- we can still use the result.
     schedule(function()
-      local status, result
-      status, result, err = self:try_call(
-        client_errors.SERVER_REQUEST_HANDLER_ERROR,
-        self.dispatchers.server_request,
-        decoded.method,
-        decoded.params
-      )
-      local _ = log.debug()
-        and log.debug(
-          'server_request: callback result',
-          { status = status, result = result, err = err }
+      coroutine.wrap(function()
+        local status, result
+        status, result, err = self:try_call(
+          client_errors.SERVER_REQUEST_HANDLER_ERROR,
+          self.dispatchers.server_request,
+          decoded.method,
+          decoded.params
         )
-      if status then
-        if not (result or err) then
-          -- TODO this can be a problem if `null` is sent for result. needs vim.NIL
-          error(
-            string.format(
-              'method %q: either a result or an error must be sent to the server in response',
-              decoded.method
+        local _ = log.debug()
+          and log.debug(
+            'server_request: callback result',
+            { status = status, result = result, err = err }
+          )
+        if status then
+          if result == nil and err == nil then
+            error(
+              string.format(
+                'method %q: either a result or an error must be sent to the server in response',
+                decoded.method
+              )
             )
-          )
+          end
+          if err then
+            assert(
+              type(err) == 'table',
+              'err must be a table. Use rpc_response_error to help format errors.'
+            )
+            local code_name = assert(
+              protocol.ErrorCodes[err.code],
+              'Errors must use protocol.ErrorCodes. Use rpc_response_error to help format errors.'
+            )
+            err.message = err.message or code_name
+          end
+        else
+          -- On an exception, result will contain the error message.
+          err = rpc_response_error(protocol.ErrorCodes.InternalError, result)
+          result = nil
         end
-        if err then
-          assert(
-            type(err) == 'table',
-            'err must be a table. Use rpc_response_error to help format errors.'
-          )
-          local code_name = assert(
-            protocol.ErrorCodes[err.code],
-            'Errors must use protocol.ErrorCodes. Use rpc_response_error to help format errors.'
-          )
-          err.message = err.message or code_name
-        end
-      else
-        -- On an exception, result will contain the error message.
-        err = rpc_response_error(protocol.ErrorCodes.InternalError, result)
-        result = nil
-      end
-      self:send_response(decoded.id, err, result)
+        self:send_response(decoded.id, err, result)
+      end)()
     end)
     -- This works because we are expecting vim.NIL here
   elseif decoded.id and (decoded.result ~= vim.NIL or decoded.error ~= vim.NIL) then
@@ -538,9 +538,9 @@ local function public_client(client)
   ---
   ---@param method (string) The invoked LSP method
   ---@param params (table|nil) Parameters for the invoked LSP method
-  ---@param callback (function) Callback to invoke
+  ---@param callback fun(err: lsp.ResponseError | nil, result: any) Callback to invoke
   ---@param notify_reply_callback (function|nil) Callback to invoke as soon as a request is no longer pending
-  ---@returns (bool, number) `(true, message_id)` if request could be sent, `false` if not
+  ---@return boolean success, integer|nil request_id true, message_id if request could be sent, `false` if not
   function result.request(method, params, callback, notify_reply_callback)
     return client:request(method, params, callback, notify_reply_callback)
   end
@@ -588,7 +588,7 @@ end
 --- and port
 ---
 ---@param host string
----@param port number
+---@param port integer
 ---@return function
 local function connect(host, port)
   return function(dispatchers)
@@ -636,7 +636,7 @@ end
 
 --- Starts an LSP server process and create an LSP RPC client object to
 --- interact with it. Communication with the spawned process happens via stdio. For
---- communication via TCP, spawn a process manually and use |vim.lsp.rpc.connect|
+--- communication via TCP, spawn a process manually and use |vim.lsp.rpc.connect()|
 ---
 ---@param cmd (string) Command to start the LSP server.
 ---@param cmd_args (table) List of additional string arguments to pass to {cmd}.
@@ -692,8 +692,8 @@ local function start(cmd, cmd_args, dispatchers, extra_spawn_params)
 
   ---@private
   --- Callback for |vim.loop.spawn()| Closes all streams and runs the `on_exit` dispatcher.
-  ---@param code (number) Exit code
-  ---@param signal (number) Signal that was used to terminate (if any)
+  ---@param code (integer) Exit code
+  ---@param signal (integer) Signal that was used to terminate (if any)
   local function onexit(code, signal)
     stdin:close()
     stdout:close()

@@ -2,7 +2,7 @@
 "
 " Author: Bram Moolenaar
 " Copyright: Vim license applies, see ":help license"
-" Last Change: 2022 Jun 24
+" Last Change: 2022 Nov 10
 "
 " WORK IN PROGRESS - The basics works stable, more to come
 " Note: In general you need at least GDB 7.12 because this provides the
@@ -154,10 +154,16 @@ func s:StartDebug_internal(dict)
 
   let s:save_columns = 0
   let s:allleft = 0
-  if exists('g:termdebug_wide')
-    if &columns < g:termdebug_wide
+  let wide = 0
+  if exists('g:termdebug_config')
+    let wide = get(g:termdebug_config, 'wide', 0)
+  elseif exists('g:termdebug_wide')
+    let wide = g:termdebug_wide
+  endif
+  if wide > 0
+    if &columns < wide
       let s:save_columns = &columns
-      let &columns = g:termdebug_wide
+      let &columns = wide
       " If we make the Vim window wider, use the whole left half for the debug
       " windows.
       let s:allleft = 1
@@ -168,7 +174,12 @@ func s:StartDebug_internal(dict)
   endif
 
   " Override using a terminal window by setting g:termdebug_use_prompt to 1.
-  let use_prompt = exists('g:termdebug_use_prompt') && g:termdebug_use_prompt
+  let use_prompt = 0
+  if exists('g:termdebug_config')
+    let use_prompt = get(g:termdebug_config, 'use_prompt', 0)
+  elseif exists('g:termdebug_use_prompt')
+    let use_prompt = g:termdebug_use_prompt
+  endif
   if !has('win32') && !use_prompt
     let s:way = 'terminal'
    else
@@ -234,7 +245,7 @@ func s:StartDebug_term(dict)
 
   " Create a hidden terminal window to communicate with gdb
   let s:comm_job_id = jobstart('tail -f /dev/null;#gdb communication', {
-        \ 'on_stdout': function('s:CommOutput'),
+        \ 'on_stdout': function('s:JobOutCallback', {'last_line': '', 'real_cb': function('s:CommOutput')}),
         \ 'pty': v:true,
         \ })
   " hide terminal buffer
@@ -419,7 +430,7 @@ func s:StartDebug_prompt(dict)
   " call ch_log('executing "' . join(gdb_cmd) . '"')
   let s:gdbjob = jobstart(gdb_cmd, {
     \ 'on_exit': function('s:EndPromptDebug'),
-    \ 'on_stdout': function('s:GdbOutCallback'),
+    \ 'on_stdout': function('s:JobOutCallback', {'last_line': '', 'real_cb': function('s:GdbOutCallback')}),
     \ })
   if s:gdbjob == 0
     echoerr 'invalid argument (or job table is full) while starting gdb job'
@@ -581,6 +592,23 @@ func s:PromptInterrupt()
   else
     call jobstop(s:gdbjob)
   endif
+endfunc
+
+" Wrapper around job callback that handles partial lines (:h channel-lines).
+" It should be called from a Dictionary with the following keys:
+" - last_line: the last (partial) line received
+" - real_cb: a callback that assumes full lines
+func s:JobOutCallback(jobid, data, event) dict
+  let eof = (a:data == [''])
+  let msgs = a:data
+  let msgs[0] = self.last_line .. msgs[0]
+  if eof
+    let self.last_line = ''
+  else
+    let self.last_line = msgs[-1]
+    unlet msgs[-1]
+  endif
+  call self.real_cb(a:jobid, msgs, a:event)
 endfunc
 
 " Function called when gdb outputs text.
@@ -903,7 +931,14 @@ func s:InstallCommands()
   endif
 
   if has('menu') && &mouse != ''
-    call s:InstallWinbar()
+    " install the window toolbar by default, can be disabled in the config
+    let winbar = 1
+    if exists('g:termdebug_config')
+      let winbar = get(g:termdebug_config, 'winbar', 1)
+    endif
+    if winbar
+      call s:InstallWinbar()
+    endif
 
     let popup = 1
     if exists('g:termdebug_config')

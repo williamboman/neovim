@@ -24,8 +24,6 @@ before_each(function()
 end)
 
 describe('legacy perl provider', function()
-  if helpers.pending_win32(pending) then return end
-
   it('feature test', function()
     eq(1, eval('has("perl")'))
   end)
@@ -68,7 +66,6 @@ describe('legacy perl provider', function()
 end)
 
 describe('perl provider', function()
-  if helpers.pending_win32(pending) then return end
   teardown(function ()
     os.remove('Xtest-perl-hello.pl')
     os.remove('Xtest-perl-hello-plugin.pl')
